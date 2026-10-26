@@ -48,5 +48,5 @@ class VNCViewer(Gtk.Window):
 
 
 if __name__ == "__main__":
-    viewer = VNCViewer("127.0.0.1", 5900)
+    viewer = VNCViewer("172.16.42.1", 5900)
     Gtk.main()
