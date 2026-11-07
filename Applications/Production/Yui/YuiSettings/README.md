@@ -26,6 +26,9 @@ In a monitor's options, enable **Custom resolution** to enter a mode such as
 
 Available controls:
 
+* **About:** a Machine section shows make, model, processor and logical CPU
+  count, memory, and total backing-disk capacity (including removable media).
+  Hardware details unavailable through Linux's public proc/sys files show Unknown.
 * **Wi-Fi:** adapter selection, radio power, scanning, open/WPA2/WPA3/OWE and
   hidden networks, reconnecting saved networks, disconnecting, and forgetting.
 * **Cellular:** per-modem carrier/signal/lock status, mobile radio, SIM PIN,

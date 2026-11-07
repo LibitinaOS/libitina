@@ -19,6 +19,7 @@ from display_page import DisplayPage
 from bluetooth_page import BluetoothPage
 from network_pages import CellularPage, NetworkPage, WifiPage
 from system_pages import AccessibilityPage, AudioPage, DateTimePage, PowerPage
+from machine_info import machine_details
 from settings import (
     load_config, set_shell, set_software_rendering_apps, set_wallpaper_enabled,
     wallpaper_enabled, set_wallpaper,
@@ -618,6 +619,9 @@ class SettingsWindow(Handy.ApplicationWindow):
         for title, text in (("Device name", platform.node()), ("Kernel", platform.release()),
                             ("Architecture", platform.machine())):
             action_row(details, title, text)
+        machine = group(page.body, "Machine")
+        for title, text in machine_details():
+            action_row(machine, title, text)
         self._stack.add_titled(page, "about", "About")
 
     def _on_sidebar_row_selected(
