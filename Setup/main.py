@@ -4,11 +4,15 @@ import json
 import os
 import re
 import tempfile
+import threading
+from urllib.error import URLError
+
+from github_profile import fetch_profile
 from pathlib import Path
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
+from gi.repository import Gtk, GLib, GdkPixbuf
 
 
 class SetupWizard(Gtk.Window):
@@ -20,11 +24,14 @@ class SetupWizard(Gtk.Window):
         self.config = {
             'language': 'en_US', 'keyboard': 'us',
             'timezone': 'America/New_York', 'fullname': '',
-            'username': '', 'hostname': ''
+            'username': '', 'hostname': '',
+            'account_source': 'manual', 'github_username': '',
+            'profile_picture': None
         }
         self.pages = [self.page_welcome, self.page_language,
                       self.page_keyboard, self.page_timezone,
-                      self.page_user, self.page_computer, self.page_finish]
+                      self.page_account, self.page_user, self.page_computer, self.page_finish]
+        self.loading_profile = False
         self.build_ui()
         self.show_page(0)
 
@@ -109,12 +116,83 @@ class SetupWizard(Gtk.Window):
             ('UTC', 'UTC')], self.config['timezone'])
         self.add_field('Timezone', self.timezone_combo)
 
+    def page_account(self):
+        self.add_heading('How would you like to set up your account?')
+        self.account_combo = self.create_combo([
+            ('I have a GitHub account', 'github'),
+            ('Enter my information manually', 'manual')], self.config['account_source'])
+        self.add_field('Account details', self.account_combo)
+        self.github_entry = Gtk.Entry(text=self.config['github_username'])
+        self.add_field('GitHub username', self.github_entry)
+        github_field = self.content.get_children()[-1]
+        github_field.set_no_show_all(True)
+
+        def update_github_field(combo):
+            if combo.get_active_id() == 'github':
+                github_field.show()
+                for child in github_field.get_children():
+                    child.show()
+            else:
+                github_field.hide()
+
+        self.account_combo.connect('changed', update_github_field)
+        update_github_field(self.account_combo)
+
+    def load_github_profile(self, username):
+        self.loading_profile = True
+        self.next_button.set_sensitive(False)
+        self.back_button.set_sensitive(False)
+        self.progress.set_text('Downloading GitHub profile…')
+
+        def worker():
+            try:
+                profile = fetch_profile(username)
+                error = None
+            except (OSError, ValueError, KeyError, TypeError, URLError) as exc:
+                profile, error = None, str(exc)
+            GLib.idle_add(complete, profile, error)
+
+        def complete(profile, error):
+            self.loading_profile = False
+            self.next_button.set_sensitive(True)
+            self.back_button.set_sensitive(True)
+            self.progress.set_text(f'Step 5 of {len(self.pages)}')
+            if error:
+                self.show_error(f'Could not load GitHub profile. Check the username and connection, '
+                                f'or enter your information manually.\n{error}')
+                return False
+            try:
+                GdkPixbuf.Pixbuf.new_from_file_at_scale(profile['profile_picture'], 128, 128, True)
+            except GLib.Error:
+                Path(profile['profile_picture']).unlink(missing_ok=True)
+                self.show_error('GitHub returned an unreadable profile picture. Please try again.')
+                return False
+            self.config.update(profile)
+            self.show_page(self.current_page + 1)
+            return False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def page_user(self):
-        self.add_heading('Create your account')
-        self.fullname_entry = Gtk.Entry(text=self.config['fullname'])
-        self.add_field('Full name', self.fullname_entry)
-        self.username_entry = Gtk.Entry(text=self.config['username'])
-        self.add_field('Username', self.username_entry)
+        if self.config['account_source'] == 'github':
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                self.config['profile_picture'], 128, 128, True)
+            picture = Gtk.Image.new_from_pixbuf(pixbuf)
+            picture.set_halign(Gtk.Align.CENTER)
+            self.content.pack_start(picture, False, False, 0)
+            self.add_heading(f"Hello, {self.config['fullname']}!")
+            self.content.get_children()[-1].set_halign(Gtk.Align.CENTER)
+            explanation = Gtk.Label(label=f'Your GitHub password is separate from your LibitinaOS '
+                                   f'password. Set a password for LibitinaOS below.\n(For reference, your GitHub username is {self.config['github_username']})')
+            explanation.set_line_wrap(True)
+            explanation.set_max_width_chars(60)
+            self.content.pack_start(explanation, False, False, 0)
+        else:
+            self.add_heading('Create your account')
+            self.fullname_entry = Gtk.Entry(text=self.config['fullname'])
+            self.add_field('Full name', self.fullname_entry)
+            self.username_entry = Gtk.Entry(text=self.config['username'])
+            self.add_field('Username', self.username_entry)
         self.password_entry = Gtk.Entry()
         self.password_entry.set_visibility(False)
         self.password_entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
@@ -153,8 +231,23 @@ class SetupWizard(Gtk.Window):
         elif self.current_page == 3:
             self.config['timezone'] = self.timezone_combo.get_active_id()
         elif self.current_page == 4:
-            fullname = self.fullname_entry.get_text().strip()
-            username = self.username_entry.get_text().strip()
+            source = self.account_combo.get_active_id()
+            if source == 'github':
+                username = self.github_entry.get_text().strip()
+                if not re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?', username):
+                    self.show_error('Enter a valid GitHub username.')
+                    return False
+                self.load_github_profile(username)
+                return False
+            if self.config['account_source'] != 'manual':
+                self.config.update(fullname='', username='', github_username='', profile_picture=None)
+            self.config['account_source'] = source
+        elif self.current_page == 5:
+            fullname = self.config['fullname']
+            username = self.config['username']
+            if self.config['account_source'] == 'manual':
+                fullname = self.fullname_entry.get_text().strip()
+                username = self.username_entry.get_text().strip()
             password = self.password_entry.get_text()
             if not fullname:
                 self.show_error('Please enter your full name.')
@@ -171,7 +264,7 @@ class SetupWizard(Gtk.Window):
             self.config['fullname'] = fullname
             self.config['username'] = username
             # Passwords are not stored or applied by this demo.
-        elif self.current_page == 5:
+        elif self.current_page == 6:
             hostname = self.hostname_entry.get_text().strip().lower()
             if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', hostname):
                 self.show_error('Enter a valid hostname (1–63 characters).')
@@ -189,20 +282,24 @@ class SetupWizard(Gtk.Window):
         self.content.show_all()
 
     def go_next(self, _button):
+        if self.loading_profile:
+            return
         if self.current_page == len(self.pages) - 1:
             self.finish_setup()
         elif self.save_current_page():
             self.show_page(self.current_page + 1)
 
     def go_back(self, _button):
+        if self.loading_profile:
+            return
         if self.current_page > 0:
             # Preserve non-sensitive selections without blocking Back on validation.
             if self.current_page in (1, 2, 3):
                 self.save_current_page()
-            elif self.current_page == 4:
+            elif self.current_page == 5 and self.config['account_source'] == 'manual':
                 self.config['fullname'] = self.fullname_entry.get_text().strip()
                 self.config['username'] = self.username_entry.get_text().strip()
-            elif self.current_page == 5:
+            elif self.current_page == 6:
                 self.config['hostname'] = self.hostname_entry.get_text().strip()
             self.show_page(self.current_page - 1)
 
