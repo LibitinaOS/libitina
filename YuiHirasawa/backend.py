@@ -3,12 +3,14 @@
 import os
 import re
 import select
+import struct
 import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -17,10 +19,14 @@ from typing import Any, Callable
 
 from gi.repository import Gio, GLib
 
+# Wire-compatible subset of wlr-protocols/unstable/
+# wlr-foreign-toplevel-management-unstable-v1.xml. Both labwc 0.8.3
+# (Debian 13) and 0.20.2 (Debian 14 testing) implement this interface.
+# Keep every request/event in opcode order, including unused requests.
 WLR_PROTOCOL_XML = """
 <protocol name="wlr_foreign_toplevel_management_unstable_v1">
   <interface name="zwlr_foreign_toplevel_manager_v1" version="3">
-    <request name="stop" type="destructor"/>
+    <request name="stop"/>
     <event name="toplevel">
       <arg name="toplevel" type="new_id" interface="zwlr_foreign_toplevel_handle_v1"/>
     </event>
@@ -31,7 +37,7 @@ WLR_PROTOCOL_XML = """
       <entry name="maximized" value="0"/>
       <entry name="minimized" value="1"/>
       <entry name="activated" value="2"/>
-      <entry name="fullscreen" value="3"/>
+      <entry name="fullscreen" value="3" since="2"/>
     </enum>
     <request name="set_maximized"/>
     <request name="unset_maximized"/>
@@ -42,13 +48,17 @@ WLR_PROTOCOL_XML = """
     </request>
     <request name="close"/>
     <request name="set_rectangle">
-      <arg name="surface" type="object" interface="wl_surface" allow-null="true"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="x" type="int"/>
       <arg name="y" type="int"/>
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
     </request>
     <request name="destroy" type="destructor"/>
+    <request name="set_fullscreen" since="2">
+      <arg name="output" type="object" interface="wl_output" allow-null="true"/>
+    </request>
+    <request name="unset_fullscreen" since="2"/>
     <event name="title">
       <arg name="title" type="string"/>
     </event>
@@ -66,7 +76,7 @@ WLR_PROTOCOL_XML = """
     </event>
     <event name="done"/>
     <event name="closed"/>
-    <event name="parent">
+    <event name="parent" since="3">
       <arg name="parent" type="object" interface="zwlr_foreign_toplevel_handle_v1" allow-null="true"/>
     </event>
   </interface>
@@ -102,6 +112,8 @@ class WaylandWindowCollector:
         self._handles: dict[str, Any] = {}
         self._globals: dict[str, tuple[int, int]] = {}
         self._seat = None
+        self._manager = None
+        self._manager_finished = False
         self._commands: SimpleQueue[tuple[str, str]] = SimpleQueue()
         self._thread = threading.Thread(target=self._run, name="TaskbarWaylandWindows", daemon=True)
         self._thread.start()
@@ -122,12 +134,18 @@ class WaylandWindowCollector:
             from pywayland.client import Display
             from pywayland.protocol.wayland import WlSeat
         except Exception as exc:
-            print(f"taskbar: pywayland unavailable: {exc}", file=sys.stderr)
+            # PyWayland replaces all native-module import failures with a
+            # generic ffi_build.py suggestion. Preserve the original exception
+            # (e.g. a missing shared library) instead of hiding it in that hint.
+            print(f"taskbar: pywayland unavailable using {sys.executable}", file=sys.stderr)
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
             return
 
         while True:
             self._globals.clear()
             self._seat = None
+            self._manager = None
+            self._manager_finished = False
             display = None
             try:
                 display = Display()
@@ -149,7 +167,7 @@ class WaylandWindowCollector:
         registry = display.get_registry()
         registry.dispatcher["global"] = self._on_global
         registry.dispatcher["global_remove"] = self._on_global_remove
-        display.roundtrip()
+        self._roundtrip(display)
 
         if not self._bind_wlr(registry):
             return
@@ -164,12 +182,18 @@ class WaylandWindowCollector:
             except Exception as exc:
                 print(f"taskbar: unable to bind Wayland seat: {exc}", file=sys.stderr)
 
-        display.roundtrip()
-        while True:
+        self._roundtrip(display)
+        while not self._manager_finished:
             self._drain_commands()
             display.flush()
             readable, _, _ = select.select([display.get_fd()], [], [], 0.1)
             display.dispatch(block=bool(readable))
+
+    @staticmethod
+    def _roundtrip(display) -> None:
+        # PyWayland 0.4.18 returns -1 here rather than raising on disconnect.
+        if display.roundtrip() == -1:
+            raise RuntimeError("Wayland roundtrip failed; compositor disconnected")
 
     def _on_global(self, _registry, name: int, interface: str, version: int) -> None:
         self._globals[_text(interface)] = (int(name), int(version))
@@ -189,11 +213,19 @@ class WaylandWindowCollector:
             print("taskbar: unable to load foreign-toplevel protocol", file=sys.stderr)
             return False
         name, version = item
-        manager = registry.bind(name, cls, min(version, 3))
+        manager = registry.bind(name, cls, min(version, cls.version, 3))
         manager.dispatcher["toplevel"] = self._on_toplevel
-        manager.dispatcher["finished"] = lambda *_args: None
+        manager.dispatcher["finished"] = self._on_finished
         self._manager = manager
         return True
+
+    def _on_finished(self, manager) -> None:
+        self._manager_finished = True
+        self._handles.clear()
+        self._windows = []
+        # finished destroys the server object; only release the local proxy.
+        manager.destroy()
+        self._manager = None
 
     def _import_protocol_class(self):
         for module_name in (
@@ -260,7 +292,6 @@ class WaylandWindowCollector:
 
         def update(**values):
             data.update(values)
-            self._upsert(data)
 
         handle.dispatcher["title"] = lambda _h, title: update(title=_text(title) or "Window")
         handle.dispatcher["app_id"] = lambda _h, app_id: update(app_id=_text(app_id))
@@ -268,14 +299,16 @@ class WaylandWindowCollector:
         handle.dispatcher["closed"] = lambda _h: self._remove(data["window_id"])
         handle.dispatcher["done"] = lambda _h: self._upsert(data)
         self._handles[data["window_id"]] = handle
-        self._upsert(data)
 
     @staticmethod
     def _is_active(state) -> bool:
+        if isinstance(state, (list, tuple)):
+            return 2 in state
+        # wl_array contains native-endian uint32 enums, not individual bytes.
         try:
-            return 2 in bytes(state)
-        except Exception:
-            return 2 in (state if isinstance(state, (list, tuple)) else [])
+            return any(value == 2 for (value,) in struct.iter_unpack("=I", bytes(state)))
+        except (TypeError, ValueError, struct.error):
+            return False
 
     def _upsert(self, data: dict[str, Any]) -> None:
         window = WindowInfo(
@@ -286,8 +319,10 @@ class WaylandWindowCollector:
         self._windows = [w for w in self._windows if w.key != window.key] + [window]
 
     def _remove(self, key: str) -> None:
-        self._handles.pop(key, None)
+        handle = self._handles.pop(key, None)
         self._windows = [w for w in self._windows if w.key != key]
+        if handle is not None:
+            handle.destroy()
 
     def _drain_commands(self) -> None:
         while not self._commands.empty():
