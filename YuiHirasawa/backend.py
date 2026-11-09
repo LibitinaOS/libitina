@@ -139,6 +139,16 @@ class WaylandWindowCollector:
             # (e.g. a missing shared library) instead of hiding it in that hint.
             print(f"taskbar: pywayland unavailable using {sys.executable}", file=sys.stderr)
             traceback.print_exception(type(exc), exc, exc.__traceback__)
+            cause = exc
+            while cause is not None:
+                if isinstance(cause, ModuleNotFoundError) and cause.name == "_cffi_backend":
+                    print(
+                        "taskbar: missing CFFI runtime. On Debian, run "
+                        "'sudo apt install python3-cffi-backend', then restart Yui.",
+                        file=sys.stderr,
+                    )
+                    break
+                cause = cause.__cause__ or cause.__context__
             return
 
         while True:

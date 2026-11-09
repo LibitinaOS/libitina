@@ -80,6 +80,8 @@ packages=(
     wlr-randr
     libpam0g
     python3
+    # Trixie's python3-pywayland does not pull in its CFFI runtime.
+    python3-cffi-backend
     python3-dbus
     python3-dbus-next
     python3-gi
