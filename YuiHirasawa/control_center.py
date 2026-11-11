@@ -5,6 +5,7 @@ import threading
 from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 import status_backend as backend
+from power_menu import create_power_menu
 from shell_widgets import _prepare_launcher_dialog, round_window_corners, slide_panel_from_right, close_animated_panel, open_animated_panel
 
 
@@ -139,9 +140,15 @@ class StatusControls:
         scroller.add(self.body)
         contents = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         contents.pack_start(scroller, True, True, 0)
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        power = Gtk.MenuButton(label='Power')
+        power.set_tooltip_text('Power options')
+        power.set_popup(create_power_menu(self.dialog, self._dismiss_dialog))
+        footer.pack_start(power, False, False, 0)
         close = Gtk.Button(label='Close', halign=Gtk.Align.END)
         close.connect('clicked', self._dismiss_dialog)
-        contents.pack_end(close, False, False, 0)
+        footer.pack_end(close, False, False, 0)
+        contents.pack_end(footer, False, False, 0)
         self.dialog.add(contents)
         self._built = False
         if self.bottom_right:

@@ -46,6 +46,9 @@ monitor DDC/CI is not supported. Wi-Fi uses NetworkManager, audio uses
 WirePlumber (`wpctl`), Bluetooth uses BlueZ, and battery status uses UPower.
 The Debian installer includes these dependencies. Status reads and control
 changes run off the UI thread, and each service can fail independently.
+Both desktop and mobile control centers include a **Power** menu with the desktop
+launcher's Lock, Suspend, Restart, Power Off, and Kill Shell actions. Suspend,
+Restart, and Power Off keep their confirmation dialogs.
 
 Set `"show_internal_watermark": true` in `~/.config/yui/config.json` to show
 the OS pretty name, kernel version, Git branch and full commit hash, and

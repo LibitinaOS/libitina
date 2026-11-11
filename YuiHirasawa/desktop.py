@@ -14,9 +14,9 @@ from backend import (
     ApplicationCatalog,
     WaylandWindowCollector,
     WindowInfo,
-    run_session_action,
 )
 from control_center import StatusControls
+from power_menu import create_power_menu
 from launcher_control import LauncherControl
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu, round_window_corners, animate_window_from_edge, close_animated_panel, open_animated_panel
@@ -104,44 +104,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             close_animated_panel(self)
 
     def _power_menu(self) -> Gtk.Menu:
-        menu = Gtk.Menu()
-        actions = (
-            ("Lock", ("loginctl", "lock-session"), False),
-            ("Suspend", ("systemctl", "suspend"), True),
-            ("Restart", ("systemctl", "reboot"), True),
-            ("Power Off", ("systemctl", "poweroff"), True),
-        )
-        for label, command, confirm in actions:
-            item = Gtk.MenuItem(label=label)
-            item.connect("activate", self._power_action, label, command, confirm)
-            menu.append(item)
-        menu.append(Gtk.SeparatorMenuItem())
-        kill_shell = Gtk.MenuItem(label="Kill Shell")
-        kill_shell.connect("activate", lambda _item: Gtk.main_quit())
-        menu.append(kill_shell)
-        menu.show_all()
-        return menu
-
-    def _power_action(self, _item: Gtk.MenuItem, label: str, command: tuple[str, ...], confirm: bool) -> None:
-        if confirm:
-            dialog = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.QUESTION,
-                buttons=Gtk.ButtonsType.CANCEL,
-                text=f"{label}?",
-            )
-            dialog.format_secondary_text("Any unsaved work may be lost.")
-            dialog.add_button(label, Gtk.ResponseType.OK)
-            response = dialog.run()
-            dialog.destroy()
-            if response != Gtk.ResponseType.OK:
-                return
-        try:
-            run_session_action(command)
-            close_animated_panel(self)
-        except GLib.Error as exc:
-            self._show_error(f"Could not {label.lower()}", exc.message)
+        return create_power_menu(self, lambda: close_animated_panel(self), self._show_error)
 
     def _show_error(self, title: str, detail: str, app=None) -> None:
         retry = (
