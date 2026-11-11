@@ -34,6 +34,7 @@ class WallpaperTests(unittest.TestCase):
         self.image._source.get_width.return_value = 1920
         self.image._source.get_height.return_value = 1080
         self.image._scaled_size = None
+        self.image.get_scale_factor.return_value = 1
 
     def update(self, width, height):
         self.module.Wallpaper._update_image(self.image, width, height)
@@ -44,10 +45,11 @@ class WallpaperTests(unittest.TestCase):
             1138, 640, self.module.GdkPixbuf.InterpType.BILINEAR)
         self.module.GdkPixbuf.Pixbuf.new_subpixbuf.assert_called_once_with(
             self.image._source.scale_simple.return_value, 389, 0, 360, 640)
-        self.image.set_from_pixbuf.assert_called_once()
+        self.image.set_from_surface.assert_called_once_with(
+            self.module.Gdk.cairo_surface_create_from_pixbuf.return_value)
         self.update(640, 360)
         self.assertEqual(self.image._source.scale_simple.call_count, 2)
-        self.assertEqual(self.image._scaled_size, (640, 360))
+        self.assertEqual(self.image._scaled_size, (640, 360, 1))
 
     def test_same_allocation_is_cached(self):
         self.update(800, 600)
@@ -60,7 +62,24 @@ class WallpaperTests(unittest.TestCase):
         self.image._source.scale_simple.assert_not_called()
         self.image._source = None
         self.update(360, 640)
-        self.image.set_from_pixbuf.assert_not_called()
+        self.image.set_from_surface.assert_not_called()
+
+    def test_hidpi_wallpaper_is_prepared_at_device_resolution_once(self):
+        self.image.get_scale_factor.return_value = 2
+        self.update(360, 640)
+        self.image._source.scale_simple.assert_called_once_with(
+            2276, 1280, self.module.GdkPixbuf.InterpType.BILINEAR)
+        self.module.GdkPixbuf.Pixbuf.new_subpixbuf.assert_called_once_with(
+            self.image._source.scale_simple.return_value, 778, 0, 720, 1280)
+        self.module.Gdk.cairo_surface_create_from_pixbuf.assert_called_once_with(
+            self.module.GdkPixbuf.Pixbuf.new_subpixbuf.return_value, 2,
+            self.image.get_window.return_value)
+        self.update(360, 640)
+        self.image._source.scale_simple.assert_called_once()
+        self.image.get_scale_factor.return_value = 3
+        self.update(360, 640)
+        self.assertEqual(self.image._source.scale_simple.call_count, 2)
+        self.assertEqual(self.image._scaled_size, (360, 640, 3))
 
     def test_wallpaper_does_not_request_image_dimensions(self):
         self.assertEqual(self.module.Wallpaper.do_get_preferred_width(self.image), (0, 0))

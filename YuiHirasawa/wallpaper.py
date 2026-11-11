@@ -52,6 +52,7 @@ class Wallpaper(Gtk.Image):
         provider.load_from_data(b".yui-wallpaper { background-color: black; }")
         self.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.connect("size-allocate", self._size_allocate)
+        self.connect("notify::scale-factor", self._scale_changed)
         self._timer = GLib.timeout_add_seconds(1, self._sync)
         self.connect("destroy", lambda *_: GLib.source_remove(self._timer))
         self._sync()
@@ -88,11 +89,22 @@ class Wallpaper(Gtk.Image):
     def _size_allocate(self, _widget, allocation):
         self._update_image(allocation.width, allocation.height)
 
+    def _scale_changed(self, *_args):
+        self._update_image(self.get_allocated_width(), self.get_allocated_height())
+
     def _update_image(self, width, height):
         if self._source is None or width <= 0 or height <= 0:
             return
-        if self._scaled_size == (width, height):
+        device_scale = self.get_scale_factor()
+        size = (width, height, device_scale)
+        if self._scaled_size == size:
             return
+        # Gtk.Image treats set_from_pixbuf images as scale 1. At scale 2/3,
+        # Cairo would filter the entire wallpaper up to device resolution on
+        # every redraw, including every frame of a transparent overlay swipe.
+        # Prepare a surface at the output's pixel size once instead.
+        width *= device_scale
+        height *= device_scale
         source_width, source_height = self._source.get_width(), self._source.get_height()
         scale = max(width / source_width, height / source_height)
         scaled_width = max(width, math.ceil(source_width * scale))
@@ -104,8 +116,9 @@ class Wallpaper(Gtk.Image):
             cover, (scaled_width - width) // 2, (scaled_height - height) // 2,
             width, height,
         )
-        self.set_from_pixbuf(cropped)
-        self._scaled_size = (width, height)
+        surface = Gdk.cairo_surface_create_from_pixbuf(cropped, device_scale, self.get_window())
+        self.set_from_surface(surface)
+        self._scaled_size = size
 
 
 class DesktopWallpaper:

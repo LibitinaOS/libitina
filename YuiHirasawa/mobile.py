@@ -33,6 +33,11 @@ class HomePageStrip(Gtk.Layout):
         super().__init__()
         self._moving = False
         self._surfaces = {}
+        # Keep the native window stationary and viewport-sized. Moving a wide,
+        # transparent GdkWindow also updates clipping for every child window.
+        # This adjustment scrolls our drawing, not Gtk.Layout's bin window.
+        self._position = Gtk.Adjustment()
+        self._position.connect("value-changed", self._position_changed)
         self.connect("size-allocate", self._invalidate_surfaces)
         self.connect("notify::scale-factor", self._invalidate_surfaces)
         self.connect("style-updated", self._invalidate_surfaces)
@@ -44,9 +49,26 @@ class HomePageStrip(Gtk.Layout):
     def begin_motion(self):
         self._moving = True
 
+    def get_page_adjustment(self):
+        return self._position
+
+    def _position_changed(self, *_args):
+        if not self._moving:
+            self._position_widgets()
+        self.queue_draw()
+
+    def _position_widgets(self):
+        width = self.get_allocated_width()
+        position = round(self._position.get_value())
+        for index, page in enumerate(self.get_children()):
+            x = index * width - position
+            if self.child_get_property(page, "x") != x:
+                self.move(page, x, 0)
+
     def end_motion(self, *_args):
         self._moving = False
         self._surfaces.clear()
+        self._position_widgets()
         self.queue_draw()
 
     def do_draw(self, cr):
@@ -57,7 +79,8 @@ class HomePageStrip(Gtk.Layout):
             return False
         width = self.get_allocated_width()
         height = self.get_allocated_height()
-        position = self.get_hadjustment().get_value()
+        # Match the integer pixel positions used by the live GTK widgets.
+        position = round(self._position.get_value())
         # Iterate only the one or two visible pages, regardless of app count.
         children = self.get_children()
         first = int(position // max(1, width))
@@ -65,6 +88,9 @@ class HomePageStrip(Gtk.Layout):
         self._surfaces = {i: surface for i, surface in self._surfaces.items() if i in visible}
         cr.save()
         Gtk.cairo_transform_to_window(cr, self, window)
+        cr.rectangle(0, 0, width, height)
+        cr.clip()
+        cr.translate(-position, 0)
         for index in visible:
             surface = self._surfaces.get(index)
             if surface is None:
@@ -138,7 +164,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         self._launch_blocked_until = 0
         # A scrollable strip keeps both neighboring pages visible during a drag.
         self._pages = HomePageStrip()
-        self._page_adjustment = self._pages.get_hadjustment()
+        self._page_adjustment = self._pages.get_page_adjustment()
         self.connect("unmap", self._on_pager_unmap)
         self._pages.connect("size-allocate", self._on_grid_allocate)
         outer.pack_start(self._pages, True, True, 0)
@@ -237,7 +263,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
     def _layout_pages(self) -> None:
         self._pages.end_motion()
         width, height = self._page_width, self._page_height
-        self._pages.set_size(max(1, len(self._page_widgets)) * width, height)
+        self._pages.set_size(width, height)
         for index, page in enumerate(self._page_widgets):
             page.set_size_request(width, height)
             self._pages.move(page, index * width, 0)
