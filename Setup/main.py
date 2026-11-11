@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compact GTK 3 first-run setup wizard (configuration preview only)."""
+"""Compact GTK 3 first-run setup wizard (configuration export)."""
 import json
 import os
 import re
@@ -24,7 +24,7 @@ class SetupWizard(Gtk.Window):
         self.config = {
             'language': 'en_US', 'keyboard': 'us',
             'timezone': 'America/New_York', 'fullname': '',
-            'username': '', 'hostname': '',
+            'username': '', 'password': '', 'hostname': '',
             'account_source': 'manual', 'github_username': '',
             'profile_picture': None
         }
@@ -193,11 +193,11 @@ class SetupWizard(Gtk.Window):
             self.add_field('Full name', self.fullname_entry)
             self.username_entry = Gtk.Entry(text=self.config['username'])
             self.add_field('Username', self.username_entry)
-        self.password_entry = Gtk.Entry()
+        self.password_entry = Gtk.Entry(text=self.config['password'])
         self.password_entry.set_visibility(False)
         self.password_entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         self.add_field('Password', self.password_entry)
-        self.confirm_entry = Gtk.Entry()
+        self.confirm_entry = Gtk.Entry(text=self.config['password'])
         self.confirm_entry.set_visibility(False)
         self.confirm_entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         self.add_field('Confirm password', self.confirm_entry)
@@ -263,7 +263,9 @@ class SetupWizard(Gtk.Window):
                 return False
             self.config['fullname'] = fullname
             self.config['username'] = username
-            # Passwords are not stored or applied by this demo.
+            # The account provisioner needs plaintext for passwd; it must delete
+            # setup.json after successfully applying the configuration.
+            self.config['password'] = password
         elif self.current_page == 6:
             hostname = self.hostname_entry.get_text().strip().lower()
             if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', hostname):
