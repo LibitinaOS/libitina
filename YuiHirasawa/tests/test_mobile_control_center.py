@@ -8,6 +8,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 def load_shade():
     repository = ModuleType('gi.repository')
     repository.Gdk = SimpleNamespace(BUTTON_PRIMARY=1)
@@ -38,8 +41,14 @@ def load_shade():
 class MobileControlCenterTests(unittest.TestCase):
     def setUp(self):
         self.module, self.repo = load_shade()
+        layout_patch = patch.object(self.module, 'load_layout', return_value={
+            'safe_inset_top': 0, 'safe_inset_bottom': 0,
+            'safe_inset_left': 0, 'safe_inset_right': 0})
+        layout_patch.start()
+        self.addCleanup(layout_patch.stop)
         self.shade = self.module.MobileStatusControls.__new__(self.module.MobileStatusControls)
-        self.shade.parent = Mock(HEIGHT=16)
+        self.shade.parent = Mock()
+        self.shade.parent.get_allocated_height.return_value = 16
         self.shade._height = 800
         self.shade._reveal = 0
         self.shade._animation = None
@@ -66,6 +75,19 @@ class MobileControlCenterTests(unittest.TestCase):
             self.pull(y=y)
             self.assertIsNone(self.shade.dialog)
         self.gesture.set_state.assert_not_called()
+
+    def test_configured_status_height_and_shade_safe_area(self):
+        self.shade.parent.get_allocated_height.return_value = 64
+        layout = {"safe_inset_top": 40, "safe_inset_bottom": 12,
+                  "safe_inset_left": 8, "safe_inset_right": 10}
+        with patch.object(self.module, 'load_layout', return_value=layout):
+            self.pull(y=60)
+        self.assertIsNotNone(self.shade.dialog)
+        contents = self.shade.dialog.get_child.return_value
+        contents.set_margin_top.assert_called_with(40)
+        contents.set_margin_bottom.assert_called_with(12)
+        contents.set_margin_start.assert_called_with(8)
+        contents.set_margin_end.assert_called_with(10)
 
     def test_horizontal_upward_and_tap_do_not_open(self):
         for dx, dy in ((0, 4), (0, -80), (100, 30)):

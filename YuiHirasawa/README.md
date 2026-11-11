@@ -58,6 +58,51 @@ a rule that opens all windows maximized and without server-side decorations.
 The original configuration stays untouched. The copy is removed when Labwc
 exits; changing shell mode takes effect at the next login.
 
+Mobile display cutouts and rounded corners can be accommodated with
+`mobile_layout` in `~/.config/yui/config.json`. These settings apply **only to the
+mobile shell**; desktop layout is unaffected. Merge this example into your config
+and restart the shell (or log out and back in):
+
+```json
+{
+  "shell": "mobile",
+  "mobile_layout": {
+    "status_bar_height": 24,
+    "status_bar_padding_top": 0,
+    "status_bar_padding_bottom": 0,
+    "status_bar_padding_left": 8,
+    "status_bar_padding_right": 8,
+    "navigation_bar_height": 36,
+    "navigation_bar_osk_height": 25,
+    "safe_inset_top": 40,
+    "safe_inset_bottom": 12,
+    "safe_inset_left": 8,
+    "safe_inset_right": 8
+  }
+}
+```
+
+All dimensions are integer **compositor logical pixels**, after output scaling;
+convert hardware pixel measurements using your output scale. Tune the example
+for your device. `safe_inset_top` leaves an empty strip above the status row, so
+set it to at least the bottom edge of a notch or hole punch. Left/right insets
+protect both bars, the launcher, and the full-screen control shade. The bottom
+inset keeps navigation controls and shade content above rounded corners or a
+bottom cutout, including while the keyboard is open. Bar backgrounds and the
+launcher wallpaper still extend to the display edges.
+
+Status-bar height describes the content row; top safe inset and vertical status
+padding are added to it. Navigation heights exclude the bottom safe inset.
+GTK may enlarge bars to fit the theme's minimum control sizes; the compositor
+reserves their actual height so maximized applications and the launcher remain
+clear of both bars. Side insets apply to shell content, not application windows.
+Cutouts are not automatically detected, and the same values apply after rotation.
+
+Omitted options preserve the existing layout: status height `16`, navigation
+height `28`, navigation height with the keyboard `25`, and all padding/insets `0`.
+Heights accept integers from `16` to `512`; padding/insets accept `0` to `512`.
+Invalid individual values in a manually edited config fall back to their defaults.
+
 Open **Display** in `Applications/Production/Yui/YuiSettings/main.py` to configure
 monitors using `wlr-randr`. Controls include enabling outputs, resolution and
 refresh rate, custom modes (for example `1920x1080@75Hz`), absolute X/Y position,

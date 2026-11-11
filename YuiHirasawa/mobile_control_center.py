@@ -3,6 +3,7 @@
 from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 from control_center import StatusControls
+from mobile_layout import load_layout, inset_content
 
 
 class MobileStatusControls(StatusControls):
@@ -32,6 +33,7 @@ class MobileStatusControls(StatusControls):
         super()._create_dialog()
         monitor = self.parent.get_display().get_monitor_at_window(self.parent.get_window())
         geometry = monitor.get_geometry()
+        inset_content(self.dialog.get_child(), load_layout())
         self._height = geometry.height
         GtkLayerShell.set_monitor(self.dialog, monitor)
         GtkLayerShell.set_exclusive_zone(self.dialog, -1)
@@ -68,7 +70,7 @@ class MobileStatusControls(StatusControls):
                                      round(self._reveal - self._height))
 
     def _pull_begin(self, _gesture, _x, y):
-        self._eligible = 0 <= y <= self.parent.HEIGHT
+        self._eligible = 0 <= y <= self.parent.get_allocated_height()
         self._dragging = False
         self._origin = 0
 

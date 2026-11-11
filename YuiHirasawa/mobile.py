@@ -16,6 +16,7 @@ from backend import (
     WaylandWindowCollector,
     WindowInfo,
 )
+from mobile_layout import load_layout, inset_content
 from mobile_control_center import MobileStatusControls
 from launcher_control import LauncherControl
 from app_launch import launch_application, launch_in_foot
@@ -56,6 +57,10 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
     def _build_content(self) -> Gtk.Widget:
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         outer.get_style_context().add_class("launcher")
+        # Layer shell already excludes the top and bottom bars.
+        layout = load_layout()
+        outer.set_margin_start(layout["safe_inset_left"])
+        outer.set_margin_end(layout["safe_inset_right"])
 
         self._apps = self._applications()
         self._tile_width = None
@@ -359,6 +364,10 @@ class StatusBar(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Status Bar")
+        self.layout = load_layout()
+        self.HEIGHT = (self.layout["status_bar_height"] + self.layout["safe_inset_top"]
+                       + self.layout["status_bar_padding_top"]
+                       + self.layout["status_bar_padding_bottom"])
         self.set_decorated(False)
 
         GtkLayerShell.init_for_window(self)
@@ -366,11 +375,23 @@ class StatusBar(Gtk.Window):
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
-        GtkLayerShell.set_exclusive_zone(self, self.HEIGHT)
+        GtkLayerShell.auto_exclusive_zone_enable(self)
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
         GtkLayerShell.set_namespace(self, "wlroots-statusbar")
 
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        bar.set_size_request(-1, self.layout["status_bar_height"])
+        bar.set_valign(Gtk.Align.CENTER)
+        # The top inset avoids the entire cutout; side padding supports cameras
+        # near an edge and rounded display corners.
+        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        status_layout = {**self.layout, "safe_inset_bottom": 0}
+        inset_content(frame, status_layout,
+                      top=self.layout["status_bar_padding_top"],
+                      bottom=self.layout["status_bar_padding_bottom"],
+                      left=self.layout["status_bar_padding_left"],
+                      right=self.layout["status_bar_padding_right"])
+        frame.pack_start(bar, True, True, 0)
         self._clock = Gtk.Label()
         self._clock.get_style_context().add_class("clock")
         bar.pack_start(self._clock, False, False, 0)
@@ -380,7 +401,7 @@ class StatusBar(Gtk.Window):
         for kind in ("network", "bt", "audio", "pwr"):
             status_icons.pack_start(self._status_controls.button(kind), False, False, 0)
         bar.pack_end(status_icons, False, False, 0)
-        self.add(bar)
+        self.add(frame)
 
         self.set_size_request(-1, self.HEIGHT)
         self.resize(1, 1)
@@ -802,6 +823,9 @@ class Taskbar(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Taskbar")
+        self.layout = load_layout()
+        self.HEIGHT = self.layout["navigation_bar_height"] + self.layout["safe_inset_bottom"]
+        self.OSK_HEIGHT = self.layout["navigation_bar_osk_height"] + self.layout["safe_inset_bottom"]
         self._no_running_programs = True
         self._osk_visible = False
         self._launcher = ApplicationLauncher()
@@ -817,7 +841,7 @@ class Taskbar(Gtk.Window):
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
-        GtkLayerShell.set_exclusive_zone(self, self.HEIGHT)
+        GtkLayerShell.auto_exclusive_zone_enable(self)
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
         GtkLayerShell.set_namespace(self, "wlroots-taskbar")
 
@@ -838,6 +862,7 @@ class Taskbar(Gtk.Window):
 
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self._bar = bar
+        inset_content(bar, {**self.layout, "safe_inset_top": 0})
         for label, callback in (
                 ("Launch", self._launcher.toggle),
                 ("Running", self._running.toggle)):
@@ -859,14 +884,11 @@ class Taskbar(Gtk.Window):
         self._osk_visible = visible
         # Keep only the compact strip reserved while Squeekboard is visible,
         # placing its controls immediately below the keyboard.
-        GtkLayerShell.set_exclusive_zone(
-            self,
-            self.OSK_HEIGHT if visible else self.HEIGHT,
-        )
+        GtkLayerShell.auto_exclusive_zone_enable(self)
         GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
         height = self.OSK_HEIGHT if visible else self.HEIGHT
         self.set_size_request(-1, height)
-        self._bar.set_size_request(-1, height)
+        self._bar.set_size_request(-1, height - self.layout["safe_inset_bottom"])
         style = self.get_style_context()
         if visible:
             style.add_class("taskbar-compact")

@@ -12,7 +12,21 @@ from typing import Any, Mapping
 
 
 CONFIG_PATH = Path.home() / ".config" / "yui" / "config.json"
+MOBILE_LAYOUT_DEFAULTS = {
+    "status_bar_height": 16,
+    "status_bar_padding_top": 0,
+    "status_bar_padding_bottom": 0,
+    "status_bar_padding_left": 0,
+    "status_bar_padding_right": 0,
+    "navigation_bar_height": 28,
+    "navigation_bar_osk_height": 25,
+    "safe_inset_top": 0,
+    "safe_inset_bottom": 0,
+    "safe_inset_left": 0,
+    "safe_inset_right": 0,
+}
 DEFAULT_CONFIG: dict[str, Any] = {
+    "mobile_layout": MOBILE_LAYOUT_DEFAULTS.copy(),
     "wallpaper": "zohran", "wallpaper_enabled": True, "shell": "desktop", "software_rendering_apps": [],
     "squeekboard_enabled": False,
     "show_internal_watermark": True,
@@ -95,6 +109,24 @@ def validate_software_rendering_apps(app_ids: list[str]) -> list[str]:
     return list(dict.fromkeys(app_ids))
 
 
+def validate_mobile_layout(value, *, strict=True):
+    """Normalize logical-pixel dimensions; tolerate bad hand edits when loading."""
+    if not isinstance(value, dict):
+        if strict:
+            raise ValueError("mobile_layout must be an object")
+        value = {}
+    result = dict(value)
+    for key, default in MOBILE_LAYOUT_DEFAULTS.items():
+        dimension = value.get(key, default)
+        minimum = 16 if key.endswith("height") else 0
+        if type(dimension) is not int or not minimum <= dimension <= 512:
+            if strict:
+                raise ValueError(f"mobile_layout.{key} must be an integer from {minimum} to 512")
+            dimension = default
+        result[key] = dimension
+    return result
+
+
 def load_config() -> dict[str, Any]:
     """Load the Yui configuration, creating it with defaults when absent."""
     if not CONFIG_PATH.exists():
@@ -128,6 +160,7 @@ def load_config() -> dict[str, Any]:
     return {
         **data,
         **lille_values,
+        "mobile_layout": validate_mobile_layout(data.get("mobile_layout", {}), strict=False),
         "wallpaper": wallpaper,
         "wallpaper_enabled": value
         if isinstance(value, bool)
@@ -164,6 +197,7 @@ def save_config(config: Mapping[str, Any]) -> None:
     lille_location = config.get("lille_location", "the front desk")
     if not isinstance(lille_location, str) or not lille_location.strip():
         raise ValueError("lille_location must be a nonempty string")
+    mobile_layout = validate_mobile_layout(config.get("mobile_layout", {}))
     lille_values = validate_lille(config)
     wallpaper = validate_wallpaper(config.get("wallpaper", "zohran"))
     shell = config.get("shell", DEFAULT_CONFIG["shell"])
@@ -183,7 +217,8 @@ def save_config(config: Mapping[str, Any]) -> None:
             delete=False,
         ) as temporary:
             json.dump(
-                {**config, **lille_values, "wallpaper": wallpaper, "wallpaper_enabled": wallpaper_enabled_value,
+                {**config, **lille_values, "mobile_layout": mobile_layout,
+                 "wallpaper": wallpaper, "wallpaper_enabled": wallpaper_enabled_value,
                  "shell": shell, "software_rendering_apps": app_ids,
                  "squeekboard_enabled": squeekboard_enabled,
                  "enable_lille": lille_enabled,
