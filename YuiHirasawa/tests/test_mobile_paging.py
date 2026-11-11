@@ -11,7 +11,8 @@ def pager_class():
     tree = ast.parse((Path(__file__).resolve().parents[1] / "mobile.py").read_text())
     launcher = next(node for node in tree.body
                     if isinstance(node, ast.ClassDef) and node.name == "ApplicationLauncher")
-    names = {"_set_page", "_stop_page_snap", "_animate_page_snap", "_on_pager_unmap"}
+    names = {"_set_page", "_stop_page_snap", "_animate_page_snap", "_on_pager_unmap",
+             "_start_swipe_launch_cooldown"}
     launcher.body = [node for node in launcher.body if isinstance(node, ast.FunctionDef)
                      and (node.name.startswith("_on_page_drag_") or node.name in names)]
     launcher.bases = []
@@ -21,6 +22,7 @@ def pager_class():
     namespace = {"Gtk": SimpleNamespace(EventSequenceState=SimpleNamespace(CLAIMED="claimed")),
                  "GLib": glib}
     exec(compile(ast.Module(body=[launcher], type_ignores=[]), "mobile.py", "exec"), namespace)
+    namespace["ApplicationLauncher"].SWIPE_LAUNCH_COOLDOWN_US = 3_000_000
     return namespace["ApplicationLauncher"], glib
 
 
@@ -32,6 +34,10 @@ class MobilePagingTests(unittest.TestCase):
         self.pager._page_width = 400
         self.pager._page_dots = [Mock(), Mock(), Mock()]
         self.pager._snap_source = None
+        self.pager._pages = Mock()
+        self.pager._pages.add_tick_callback.return_value = 7
+        self.clock = Mock()
+        self.clock.get_frame_time.side_effect = lambda: self.glib.get_monotonic_time()
         self.position = 400
         self.pager._page_adjustment = Mock()
         self.pager._page_adjustment.get_value.side_effect = lambda: self.position
@@ -50,7 +56,7 @@ class MobilePagingTests(unittest.TestCase):
 
     def finish_animation(self):
         self.glib.get_monotonic_time.return_value = 1_220_000
-        self.assertFalse(self.pager._animate_page_snap())
+        self.assertFalse(self.pager._animate_page_snap(self.pager._pages, self.clock))
 
     def test_pages_follow_finger_in_both_directions_before_release(self):
         self.drag(-60)
@@ -68,7 +74,7 @@ class MobilePagingTests(unittest.TestCase):
         self.assertEqual(self.pager._current_page, 2)
         self.assertEqual(self.position, 500)
         self.glib.get_monotonic_time.return_value = 1_110_000
-        self.assertTrue(self.pager._animate_page_snap())
+        self.assertTrue(self.pager._animate_page_snap(self.pager._pages, self.clock))
         self.assertGreater(self.position, 500)
         self.assertLess(self.position, 800)
         self.finish_animation()
@@ -111,7 +117,7 @@ class MobilePagingTests(unittest.TestCase):
         self.drag(-100)
         self.release(-100)
         self.pager._on_page_drag_begin(self.gesture, 0, 0)
-        self.glib.source_remove.assert_called_once_with(7)
+        self.pager._pages.remove_tick_callback.assert_called_once_with(7)
         self.assertEqual(self.position, 500)
         self.drag(-20)
         self.assertEqual(self.position, 520)
@@ -120,8 +126,25 @@ class MobilePagingTests(unittest.TestCase):
         self.drag(-100)
         self.release(-100)
         self.pager._on_pager_unmap(Mock())
-        self.glib.source_remove.assert_called_once_with(7)
+        self.pager._pages.remove_tick_callback.assert_called_once_with(7)
         self.assertEqual(self.position, 800)
+
+    def test_long_drag_settles_at_visible_page(self):
+        self.pager._page_dots.extend([Mock(), Mock()])
+        self.drag(-850)
+        self.release(-850)
+        self.assertEqual(self.pager._current_page, 3)
+        self.finish_animation()
+        self.assertEqual(self.position, 1200)
+
+    def test_snap_uses_display_clock_and_restores_live_buttons(self):
+        self.drag(-100)
+        self.release(-100)
+        self.pager._pages.add_tick_callback.assert_called_once_with(self.pager._animate_page_snap)
+        self.glib.timeout_add.assert_not_called()
+        self.pager._pages.end_motion.reset_mock()
+        self.finish_animation()
+        self.pager._pages.end_motion.assert_called_once()
 
 
 if __name__ == "__main__":

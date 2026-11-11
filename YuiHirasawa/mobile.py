@@ -1,7 +1,9 @@
 """Mobile shell layout and interactions."""
 
 from typing import Callable
+import math
 
+import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -22,6 +24,64 @@ from launcher_control import LauncherControl
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu
 from wallpaper import Wallpaper
+
+
+class HomePageStrip(Gtk.Layout):
+    """Keep live buttons at rest; composite only visible page images in motion."""
+
+    def __init__(self):
+        super().__init__()
+        self._moving = False
+        self._surfaces = {}
+        self.connect("size-allocate", self._invalidate_surfaces)
+        self.connect("notify::scale-factor", self._invalidate_surfaces)
+        self.connect("style-updated", self._invalidate_surfaces)
+        self.connect("unmap", self.end_motion)
+
+    def _invalidate_surfaces(self, *_args):
+        self._surfaces.clear()
+
+    def begin_motion(self):
+        self._moving = True
+
+    def end_motion(self, *_args):
+        self._moving = False
+        self._surfaces.clear()
+        self.queue_draw()
+
+    def do_draw(self, cr):
+        if not self._moving:
+            return Gtk.Layout.do_draw(self, cr)
+        window = self.get_bin_window()
+        if not Gtk.cairo_should_draw_window(cr, window):
+            return False
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        position = self.get_hadjustment().get_value()
+        # Iterate only the one or two visible pages, regardless of app count.
+        children = self.get_children()
+        first = int(position // max(1, width))
+        visible = range(first, min(len(children), math.ceil((position + width) / max(1, width))))
+        self._surfaces = {i: surface for i, surface in self._surfaces.items() if i in visible}
+        cr.save()
+        Gtk.cairo_transform_to_window(cr, self, window)
+        for index in visible:
+            surface = self._surfaces.get(index)
+            if surface is None:
+                page = children[index]
+                # Do not snapshot an allocation GTK has not laid out yet.
+                if page.get_allocated_width() != width or page.get_allocated_height() != height:
+                    cr.restore()
+                    return Gtk.Layout.do_draw(self, cr)
+                scale = self.get_scale_factor()
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * scale, height * scale)
+                surface.set_device_scale(scale, scale)
+                page.draw(cairo.Context(surface))
+                self._surfaces[index] = surface
+            cr.set_source_surface(surface, index * width, 0)
+            cr.paint()
+        cr.restore()
+        return False
 
 
 class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
@@ -77,7 +137,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         self._page_drag_moved = False
         self._launch_blocked_until = 0
         # A scrollable strip keeps both neighboring pages visible during a drag.
-        self._pages = Gtk.Layout()
+        self._pages = HomePageStrip()
         self._page_adjustment = self._pages.get_hadjustment()
         self.connect("unmap", self._on_pager_unmap)
         self._pages.connect("size-allocate", self._on_grid_allocate)
@@ -175,6 +235,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         return GLib.SOURCE_REMOVE
 
     def _layout_pages(self) -> None:
+        self._pages.end_motion()
         width, height = self._page_width, self._page_height
         self._pages.set_size(max(1, len(self._page_widgets)) * width, height)
         for index, page in enumerate(self._page_widgets):
@@ -186,7 +247,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
 
     def _stop_page_snap(self) -> None:
         if self._snap_source is not None:
-            GLib.source_remove(self._snap_source)
+            self._pages.remove_tick_callback(self._snap_source)
             self._snap_source = None
 
     def _on_pager_unmap(self, _widget) -> None:
@@ -204,20 +265,23 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             self._snap_start = start
             self._snap_target = target
             self._snap_started = GLib.get_monotonic_time()
-            self._snap_source = GLib.timeout_add(16, self._animate_page_snap)
+            self._pages.begin_motion()
+            self._snap_source = self._pages.add_tick_callback(self._animate_page_snap)
         else:
             self._page_adjustment.set_value(target)
+            self._pages.end_motion()
         for i, dot in enumerate(self._page_dots):
             style = dot.get_style_context()
             (style.add_class if i == self._current_page else style.remove_class)("active")
 
-    def _animate_page_snap(self) -> bool:
-        progress = min(1.0, (GLib.get_monotonic_time() - self._snap_started) / 220_000)
+    def _animate_page_snap(self, _widget, frame_clock) -> bool:
+        progress = max(0.0, min(1.0, (frame_clock.get_frame_time() - self._snap_started) / 220_000))
         eased = 1 - (1 - progress) ** 3
         self._page_adjustment.set_value(
             self._snap_start + (self._snap_target - self._snap_start) * eased)
         if progress >= 1:
             self._snap_source = None
+            self._pages.end_motion()
             return GLib.SOURCE_REMOVE
         return GLib.SOURCE_CONTINUE
 
@@ -241,6 +305,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
 
     def _on_page_drag_begin(self, _gesture, _x: float, _y: float) -> None:
         self._stop_page_snap()
+        self._pages.end_motion()
         self._page_drag_claimed = False
         self._page_drag_moved = False
         self._drag_start_position = self._page_adjustment.get_value()
@@ -256,6 +321,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             # Claim before release, cancelling any app button's pending click.
             self._page_drag_claimed = True
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self._pages.begin_motion()
         if self._page_drag_claimed:
             limit = max(0, len(self._page_dots) - 1) * self._page_width
             self._page_adjustment.set_value(
@@ -266,8 +332,8 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             self._start_swipe_launch_cooldown()
         self._page_drag_moved = False
         if self._page_drag_claimed:
-            target = self._drag_start_page
-            if abs(dx) >= max(48, self._page_width * 0.2):
+            target = int(self._page_adjustment.get_value() / self._page_width + 0.5)
+            if target == self._drag_start_page and abs(dx) >= max(48, self._page_width * 0.2):
                 target += 1 if dx < 0 else -1
             self._set_page(target)
         else:
