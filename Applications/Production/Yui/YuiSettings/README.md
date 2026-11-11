@@ -18,8 +18,11 @@ colors, borders, icons, and widget appearance come from the current GTK and icon
 Select a network, device, or monitor to open its options. An unsaved secured
 Wi-Fi network prompts for its password; saved networks open their connection
 editor. Saved-network management and device details live in dialogs. The
-Advanced tab retains its original inline compatibility and software-rendering
-controls. Audio volume, mute, device selection, and power-mode changes apply
+Advanced tab includes compatibility and software-rendering controls plus mobile
+layout options: status-bar height and padding, navigation-bar heights (including
+with the keyboard open), and safe insets for all four screen edges. Values use
+logical pixels after display scaling. Select **Save mobile layout**, then log out
+and back in to apply them to the mobile shell. Desktop layout is unaffected. Audio volume, mute, device selection, and power-mode changes apply
 directly. Monitor edits are staged until **Apply** is selected in the header.
 In a monitor's options, enable **Custom resolution** to enter a mode such as
 `1600x900@75Hz` directly. Disable it to return to the advertised-mode dropdown.

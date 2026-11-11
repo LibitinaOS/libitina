@@ -57,6 +57,7 @@ patches = [patch.object(display_page.displays, 'query_outputs', lambda: outputs)
     patch.object(display_page.displays, 'CONFIG_PATH', Path(temporary.name) / 'monitors.json'),
     patch.object(display_page.displays, 'STATUS_PATH', Path(temporary.name) / 'monitors-status.json'),
     patch.object(main, 'load_config', lambda: config),
+    patch.object(main, 'save_config', lambda value: config.update(value)),
     patch.object(main, 'set_shell', lambda value: config.update(shell=value)),
     patch.object(main, 'set_software_rendering_apps', lambda values: config.update(software_rendering_apps=values)),
     patch.object(main, 'wallpaper_enabled', lambda: True),
@@ -256,7 +257,23 @@ assert window._software_app_entry.get_text() == ''
 remove = next(item for item in widgets(page) if isinstance(item, Gtk.Button) and item.get_tooltip_text() == 'Remove org.example.App.desktop')
 remove.clicked()
 assert config['software_rendering_apps'] == []
-print('Advanced retains its original inline controls and application list', flush=True)
+assert set(window._mobile_layout_inputs) == set(main.MOBILE_LAYOUT_DEFAULTS)
+for key, spin in window._mobile_layout_inputs.items():
+    assert spin.get_value_as_int() == main.MOBILE_LAYOUT_DEFAULTS[key]
+    assert spin.get_adjustment().get_upper() == 512
+    assert spin.get_adjustment().get_lower() == (16 if key.endswith('height') else 0)
+window._mobile_layout_inputs['safe_inset_top'].set_value(40)
+window._mobile_layout_inputs['navigation_bar_height'].set_value(36)
+window._save_mobile_layout()
+assert config['mobile_layout']['safe_inset_top'] == 40
+assert config['mobile_layout']['navigation_bar_height'] == 36
+assert config['shell'] == 'desktop'
+assert config['software_rendering_apps'] == []
+assert window._mobile_layout_status.get_text().startswith('Saved.')
+with patch.object(main, 'save_config', side_effect=OSError('Read-only config')):
+    window._save_mobile_layout()
+assert 'Could not save mobile layout' in window._mobile_layout_status.get_text()
+print('Advanced retains existing controls and saves mobile-only layout options', flush=True)
 
 page = navigate('audio')
 with patch.object(system_pages.backend, 'run') as run:

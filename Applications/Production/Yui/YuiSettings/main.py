@@ -23,7 +23,7 @@ from machine_info import machine_details
 from settings import (
     load_config, set_shell, set_software_rendering_apps, set_wallpaper_enabled,
     wallpaper_enabled, set_wallpaper,
-    save_config,
+    save_config, MOBILE_LAYOUT_DEFAULTS,
 )
 
 
@@ -394,11 +394,77 @@ class SettingsWindow(Handy.ApplicationWindow):
                 f"writable-changed::{BUTTON_LAYOUT_KEY}",
                 lambda *_args: self._refresh_window_button_controls(),
             )
+        self._add_mobile_layout_controls(page)
         self._add_software_rendering_controls(page)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.add(page)
         self._stack.add_titled(scroll, "advanced", "Advanced")
+
+    def _add_mobile_layout_controls(self, page: Gtk.Box) -> None:
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        description = Gtk.Label(
+            label=("Mobile layout options apply only to the mobile shell. "
+                   "Desktop layout is unaffected. Values use logical pixels after display scaling. "
+                   "Set the top safe inset to clear the bottom of a notch or camera hole."),
+            xalign=0, wrap=True,
+        )
+        description.set_max_width_chars(48)
+        page.pack_start(Gtk.Label(label="Mobile layout", xalign=0), False, False, 0)
+        page.pack_start(description, False, False, 0)
+        layout = load_config().get("mobile_layout", MOBILE_LAYOUT_DEFAULTS)
+        self._mobile_layout_inputs = {}
+        for title, fields in (
+            ("Status bar", (
+                ("status_bar_height", "Content height"),
+                ("status_bar_padding_top", "Top padding"),
+                ("status_bar_padding_bottom", "Bottom padding"),
+                ("status_bar_padding_left", "Left padding"),
+                ("status_bar_padding_right", "Right padding"),
+            )),
+            ("Navigation bar", (
+                ("navigation_bar_height", "Content height"),
+                ("navigation_bar_osk_height", "Height with keyboard"),
+            )),
+            ("Safe screen insets", (
+                ("safe_inset_top", "Top"),
+                ("safe_inset_bottom", "Bottom"),
+                ("safe_inset_left", "Left"),
+                ("safe_inset_right", "Right"),
+            )),
+        ):
+            section = group(page, title)
+            for key, label in fields:
+                minimum = 16 if key.endswith("height") else 0
+                spin = Gtk.SpinButton.new_with_range(minimum, 512, 1)
+                spin.set_numeric(True)
+                spin.set_digits(0)
+                spin.set_width_chars(3)
+                spin.set_value(layout.get(key, MOBILE_LAYOUT_DEFAULTS[key]))
+                action_row(section, label, suffix=spin)
+                self._mobile_layout_inputs[key] = spin
+        save = Gtk.Button(label="Save mobile layout")
+        save.connect("clicked", self._save_mobile_layout)
+        page.pack_start(save, False, False, 0)
+        self._mobile_layout_status = Gtk.Label(xalign=0, wrap=True)
+        self._mobile_layout_status.set_max_width_chars(48)
+        page.pack_start(self._mobile_layout_status, False, False, 0)
+
+    def _save_mobile_layout(self, *_args) -> None:
+        config = load_config()
+        layout = dict(config.get("mobile_layout", {}))
+        for key, spin in self._mobile_layout_inputs.items():
+            spin.update()
+            layout[key] = spin.get_value_as_int()
+        config["mobile_layout"] = layout
+        try:
+            save_config(config)
+        except (OSError, ValueError) as exc:
+            self._mobile_layout_status.set_text(f"Could not save mobile layout: {exc}")
+        else:
+            self._mobile_layout_status.set_text(
+                "Saved. Log out and back in to apply to the mobile shell. Desktop layout is unaffected."
+            )
 
     def _add_lille_page(self):
         config = load_config()
