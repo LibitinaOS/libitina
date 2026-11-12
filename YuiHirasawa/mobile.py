@@ -42,6 +42,7 @@ class HomePageStrip(Gtk.Layout):
         self.connect("notify::scale-factor", self._invalidate_surfaces)
         self.connect("style-updated", self._invalidate_surfaces)
         self.connect("unmap", self.end_motion)
+        self.connect("map", lambda *_args: self.queue_resize())
 
     def _invalidate_surfaces(self, *_args):
         self._surfaces.clear()
@@ -60,10 +61,16 @@ class HomePageStrip(Gtk.Layout):
     def _position_widgets(self):
         width = self.get_allocated_width()
         position = round(self._position.get_value())
+        moved = False
         for index, page in enumerate(self.get_children()):
             x = index * width - position
             if self.child_get_property(page, "x") != x:
                 self.move(page, x, 0)
+                moved = True
+        if moved:
+            # Gtk.Layout.move can leave an unmapped/offscreen child's old
+            # allocation and input windows in place. Allocate the strip too.
+            self.queue_resize()
 
     def end_motion(self, *_args):
         self._moving = False
@@ -166,13 +173,22 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         self._pages = HomePageStrip()
         self._page_adjustment = self._pages.get_page_adjustment()
         self.connect("unmap", self._on_pager_unmap)
+        self.connect("map", self._on_pager_map)
         self._pages.connect("size-allocate", self._on_grid_allocate)
         outer.pack_start(self._pages, True, True, 0)
 
         self._dots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._dots.set_halign(Gtk.Align.CENTER)
         self._dots.set_size_request(-1, 28)
-        outer.pack_start(self._dots, False, False, 0)
+        # The indicator must never widen the launcher. Otherwise many dots
+        # enlarge the viewport, reduce the page count, shrink the viewport,
+        # and repeatedly rebuild the whole app grid (including after remap).
+        self._dot_viewport = Gtk.ScrolledWindow()
+        self._dot_viewport.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        self._dot_viewport.set_min_content_width(0)
+        self._dot_viewport.set_size_request(-1, 28)
+        self._dot_viewport.add(self._dots)
+        outer.pack_start(self._dot_viewport, False, False, 0)
         outer.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
         outer.connect("scroll-event", self._on_page_scroll)
         # Capture on the window so buttons cannot consume the touch sequence
@@ -270,6 +286,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         self._page_adjustment.configure(
             self._page_adjustment.get_value(), 0,
             max(1, len(self._page_widgets)) * width, 1, width, width)
+        self._pages.queue_resize()
 
     def _stop_page_snap(self) -> None:
         if self._snap_source is not None:
@@ -277,7 +294,19 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             self._snap_source = None
 
     def _on_pager_unmap(self, _widget) -> None:
+        self._swipe.reset()
         self._page_drag_claimed = False
+        self._page_drag_moved = False
+        self._launch_blocked_until = 0
+        self._scroll_delta = 0
+        self._set_page(self._current_page, animate=False)
+
+    def _on_pager_map(self, _widget) -> None:
+        self._swipe.reset()
+        self._page_drag_claimed = False
+        self._page_drag_moved = False
+        self._launch_blocked_until = 0
+        self._scroll_delta = 0
         self._set_page(self._current_page, animate=False)
 
     def _set_page(self, index: int, *, animate: bool = True) -> None:
@@ -287,7 +316,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
         self._stop_page_snap()
         target = self._current_page * self._page_width
         start = self._page_adjustment.get_value()
-        if animate and abs(target - start) > 0.5:
+        if animate and self.get_mapped() and abs(target - start) > 0.5:
             self._snap_start = start
             self._snap_target = target
             self._snap_started = GLib.get_monotonic_time()
@@ -372,7 +401,7 @@ class ApplicationLauncher(Gtk.Window, ApplicationCatalog):
             self._start_swipe_launch_cooldown()
         self._page_drag_moved = False
         self._page_drag_claimed = False
-        self._set_page(self._current_page)
+        self._set_page(self._current_page, animate=self.get_mapped())
 
     def _start_swipe_launch_cooldown(self) -> None:
         self._launch_blocked_until = GLib.get_monotonic_time() + self.SWIPE_LAUNCH_COOLDOWN_US

@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 
@@ -18,7 +19,7 @@ class HomePageDrawingTests(unittest.TestCase):
         gi.require_version("Gtk", "3.0")
         gi.require_version("Gdk", "3.0")
         gi.require_version("GdkPixbuf", "2.0")
-        from gi.repository import Gdk, GdkPixbuf, Gtk, GLib
+        from gi.repository import Gdk, GdkPixbuf, Gio, Gtk, GLib, Pango
         Gtk.init([])
         Gtk.Settings.get_default().set_property("gtk-enable-animations", False)
         cls.Gtk, cls.GLib, cls.cairo = Gtk, GLib, cairo
@@ -35,6 +36,20 @@ class HomePageDrawingTests(unittest.TestCase):
         exec(compile(ast.Module(body=[wallpaper], type_ignores=[]), "wallpaper.py", "exec"), namespace)
         # Supply test pixels directly instead of reading the user's settings.
         cls.Wallpaper = type("TestWallpaper", (namespace["Wallpaper"],), {"_sync": lambda self: True})
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "mobile.py").read_text())
+        launcher = next(node for node in tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == "ApplicationLauncher")
+        apps = [SimpleNamespace(get_icon=lambda: None,
+                                get_display_name=lambda i=i: f"Application {i}") for i in range(60)]
+        namespace.update(Gio=Gio, Pango=Pango, HomePageStrip=cls.Strip,
+                         Wallpaper=cls.Wallpaper, GtkLayerShell=Mock(),
+                         ApplicationCatalog=type("TestCatalog", (), {"_applications": lambda self: apps}),
+                         load_layout=lambda: {"safe_inset_left": 0, "safe_inset_right": 0},
+                         attach_application_menu=lambda *args: None,
+                         launch_application=Mock(return_value=True))
+        exec(compile(ast.Module(body=[launcher], type_ignores=[]), "mobile.py", "exec"), namespace)
+        cls.Launcher = namespace["ApplicationLauncher"]
+        cls.launch = namespace["launch_application"]
 
     def settle(self):
         loop = self.GLib.MainLoop()
@@ -81,6 +96,25 @@ class HomePageDrawingTests(unittest.TestCase):
         (widget or self.strip).draw(self.cairo.Context(surface))
         surface.flush()
         return bytes(surface.get_data())
+
+    def pointer_event(self, launcher, window, kind, x, y):
+        from gi.repository import Gdk
+        event = Gdk.Event.new(kind)
+        event.window = window
+        event.set_device(launcher.get_display().get_default_seat().get_pointer())
+        event.time = (self.GLib.get_monotonic_time() // 1000) % (2 ** 32)
+        event.send_event = True
+        event.x, event.y = x, y
+        origin = window.get_origin()
+        event.x_root, event.y_root = origin[-2] + x, origin[-1] + y
+        if kind == Gdk.EventType.BUTTON_PRESS:
+            event.button = Gdk.BUTTON_PRIMARY
+            event.state = Gdk.ModifierType(0)
+        else:
+            event.state = Gdk.ModifierType.BUTTON1_MASK
+            if kind == Gdk.EventType.BUTTON_RELEASE:
+                event.button = Gdk.BUTTON_PRIMARY
+        self.Gtk.main_do_event(event)
 
     def test_cached_pages_match_live_widgets_at_scroll_offsets(self):
         for offset in (0, 37, self.width // 2, self.width, self.width + 53):
@@ -180,6 +214,57 @@ class HomePageDrawingTests(unittest.TestCase):
         for i, page in enumerate(self.pages):
             self.assertEqual(self.strip.child_get_property(page, "x"),
                              i * self.width - round(self.strip.get_page_adjustment().get_value()))
+
+    def test_launcher_reopens_on_second_page_and_remains_interactive(self):
+        from gi.repository import Gdk
+        launcher = self.Launcher()
+        self.addCleanup(launcher.destroy)
+        launcher.set_default_size(320, 480)
+        launcher.show_all()
+        self.settle()
+        self.assertGreater(len(launcher._page_widgets), 2)
+        shape = launcher._grid_shape
+        pages = tuple(launcher._page_widgets)
+        for cycle in range(3):
+            with self.subTest(cycle=cycle):
+                launcher._set_page(1, animate=False)
+                self.settle()
+                launcher.hide()
+                launcher.show_all()
+                self.settle()
+                self.assertEqual(launcher._current_page, 1)
+                self.assertEqual(launcher._page_adjustment.get_value(), launcher._page_width)
+                self.assertEqual(launcher._pages.child_get_property(launcher._page_widgets[1], "x"), 0)
+                self.assertEqual(launcher._page_widgets[1].get_allocation().x, 0)
+                self.assertEqual(launcher._grid_shape, shape)
+                self.assertEqual(tuple(launcher._page_widgets), pages, "reopen must reuse the app grids")
+                self.assertIsNone(launcher._snap_source)
+                launcher._page_dots[2].clicked()
+                loop = self.GLib.MainLoop()
+                self.GLib.timeout_add(300, lambda: (loop.quit(), False)[1])
+                loop.run()
+                self.assertEqual(launcher._page_adjustment.get_value(), 2 * launcher._page_width)
+                self.assertIsNone(launcher._snap_source)
+                window = launcher._pages.get_bin_window()
+                self.pointer_event(launcher, window, Gdk.EventType.BUTTON_PRESS, 100, 100)
+                self.pointer_event(launcher, window, Gdk.EventType.MOTION_NOTIFY, 200, 100)
+                self.assertEqual(launcher._page_adjustment.get_value(), 2 * launcher._page_width - 100)
+                self.pointer_event(launcher, window, Gdk.EventType.BUTTON_RELEASE, 200, 100)
+                launcher.hide()
+                launcher.show_all()
+                self.settle()
+                self.assertFalse(launcher._page_drag_moved)
+                self.assertFalse(launcher._page_drag_claimed)
+                self.launch.reset_mock()
+                button = launcher._page_widgets[1].get_children()[0].get_children()[0]
+                # Input windows must move along with the pixels on the page.
+                origin = button.get_event_window().get_origin()
+                viewport_origin = launcher._pages.get_bin_window().get_origin()
+                self.assertGreaterEqual(origin[-2] - viewport_origin[-2], 0)
+                self.assertLess(origin[-2] - viewport_origin[-2], launcher._page_width)
+                self.pointer_event(launcher, button.get_event_window(), Gdk.EventType.BUTTON_PRESS, 10, 10)
+                self.pointer_event(launcher, button.get_event_window(), Gdk.EventType.BUTTON_RELEASE, 10, 10)
+                self.launch.assert_called_once()
 
 
 if __name__ == "__main__":

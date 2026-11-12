@@ -11,7 +11,7 @@ def pager_class():
     tree = ast.parse((Path(__file__).resolve().parents[1] / "mobile.py").read_text())
     launcher = next(node for node in tree.body
                     if isinstance(node, ast.ClassDef) and node.name == "ApplicationLauncher")
-    names = {"_set_page", "_stop_page_snap", "_animate_page_snap", "_on_pager_unmap",
+    names = {"_set_page", "_stop_page_snap", "_animate_page_snap", "_on_pager_unmap", "_on_pager_map",
              "_start_swipe_launch_cooldown"}
     launcher.body = [node for node in launcher.body if isinstance(node, ast.FunctionDef)
                      and (node.name.startswith("_on_page_drag_") or node.name in names)]
@@ -35,6 +35,8 @@ class MobilePagingTests(unittest.TestCase):
         self.pager._page_dots = [Mock(), Mock(), Mock()]
         self.pager._snap_source = None
         self.pager._pages = Mock()
+        self.pager._swipe = Mock()
+        self.pager.get_mapped = Mock(return_value=True)
         self.pager._pages.add_tick_callback.return_value = 7
         self.clock = Mock()
         self.clock.get_frame_time.side_effect = lambda: self.glib.get_monotonic_time()
@@ -145,6 +147,35 @@ class MobilePagingTests(unittest.TestCase):
         self.pager._pages.end_motion.reset_mock()
         self.finish_animation()
         self.pager._pages.end_motion.assert_called_once()
+
+    def test_hide_mid_drag_resets_input_and_launch_block(self):
+        self.drag(-100)
+        self.pager.get_mapped.return_value = False
+        self.pager._on_pager_unmap(Mock())
+        self.assertFalse(self.pager._page_drag_claimed)
+        self.assertFalse(self.pager._page_drag_moved)
+        self.assertEqual(self.pager._launch_blocked_until, 0)
+        self.assertEqual(self.position, 400)
+        self.assertIsNone(self.pager._snap_source)
+        self.pager._swipe.reset.assert_called_once()
+
+    def test_hidden_cancel_does_not_restart_animation(self):
+        self.drag(-100)
+        self.pager.get_mapped.return_value = False
+        self.pager._on_page_drag_cancel(self.gesture, None)
+        self.assertEqual(self.position, 400)
+        self.pager._pages.add_tick_callback.assert_not_called()
+
+    def test_reopen_clears_stale_gesture_and_finishes_snap(self):
+        self.drag(-100)
+        self.release(-100)
+        self.pager._page_drag_moved = True
+        self.pager._on_pager_map(Mock())
+        self.assertFalse(self.pager._page_drag_claimed)
+        self.assertFalse(self.pager._page_drag_moved)
+        self.assertEqual(self.pager._launch_blocked_until, 0)
+        self.assertEqual(self.position, 800)
+        self.assertIsNone(self.pager._snap_source)
 
 
 if __name__ == "__main__":
