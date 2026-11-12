@@ -178,7 +178,10 @@ Desktop mode starts the built-in background-layer utility automatically, with a
 surface for each monitor (including hotplugged displays). It can also run alone
 with `python3 wallpaper.py` in a Wayland session; avoid running it alongside the
 desktop shell. The renderer uses GTK 3, gtk-layer-shell, and GdkPixbuf for scaling and centered
-cropping; it does not require the Python Cairo foreign-struct converter.
+cropping. It loads the Python Cairo foreign-struct converter to prepare wallpapers
+at the output's pixel resolution. If the converter is unavailable, it falls back
+to a logical-resolution pixbuf. On Debian, install the bridge with
+`sudo apt install python3-gi-cairo` and restart Yui to enable the optimized path.
 
 The launcher routes its own logs and inherited stdout/stderr from the shell,
 notification daemon, display worker, and session compositor to the systemd

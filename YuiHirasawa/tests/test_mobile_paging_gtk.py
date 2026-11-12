@@ -4,6 +4,7 @@ import ast
 import logging
 import math
 import os
+import weakref
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ class HomePageDrawingTests(unittest.TestCase):
         tree = ast.parse((Path(__file__).resolve().parents[1] / "mobile.py").read_text())
         strip = next(node for node in tree.body
                      if isinstance(node, ast.ClassDef) and node.name == "HomePageStrip")
-        namespace = dict(Gtk=Gtk, cairo=cairo, math=math)
+        namespace = dict(Gtk=Gtk, cairo=cairo, math=math, weakref=weakref, GLib=GLib)
         exec(compile(ast.Module(body=[strip], type_ignores=[]), "mobile.py", "exec"), namespace)
         cls.Strip = namespace["HomePageStrip"]
         tree = ast.parse((Path(__file__).resolve().parents[1] / "wallpaper.py").read_text())
@@ -140,13 +141,13 @@ class HomePageDrawingTests(unittest.TestCase):
             self.strip.get_page_adjustment().set_value(offset)
             self.render()
         self.assertEqual(sum(self.draws), before, "motion must reuse rendered icons and labels")
-        self.assertEqual(len(self.strip._surfaces), 2)
+        self.assertLessEqual(len(self.strip._surfaces), 3)
         for i in range(1, 7):
             self.strip.get_page_adjustment().set_value(i * self.width + 37)
             self.render()
-            self.assertEqual(len(self.strip._surfaces), 2)
+            self.assertLessEqual(len(self.strip._surfaces), 3)
         self.strip.end_motion()
-        self.assertFalse(self.strip._surfaces)
+        self.assertLessEqual(len(self.strip._surfaces), 3)
         self.settle()
         before = sum(self.draws)
         self.render()
@@ -155,7 +156,7 @@ class HomePageDrawingTests(unittest.TestCase):
     def test_resize_replaces_cached_surfaces(self):
         self.strip.begin_motion()
         self.render()
-        old_surface = self.strip._surfaces[0]
+        old_surface = self.strip._surfaces[self.pages[0]]
         self.window.resize(self.width + 40, self.height + 40)
         self.settle()
         self.width = self.strip.get_allocated_width()
@@ -167,8 +168,67 @@ class HomePageDrawingTests(unittest.TestCase):
         self.strip.get_page_adjustment().configure(0, 0, 8 * self.width, 1, self.width, self.width)
         self.settle()
         self.render()
-        self.assertIsNot(self.strip._surfaces[0], old_surface)
-        self.assertEqual(self.strip._surfaces[0].get_width(), self.width * self.strip.get_scale_factor())
+        self.assertIsNot(self.strip._surfaces[self.pages[0]], old_surface)
+        self.assertEqual(self.strip._surfaces[self.pages[0]].get_width(), self.width * self.strip.get_scale_factor())
+
+    def test_repeated_swipes_use_pages_prepared_while_idle(self):
+        self.settle()
+        capture = Mock(wraps=self.strip._capture_page)
+        self.strip._capture_page = capture
+        for _cycle in range(4):
+            for offsets in ((37, self.width // 2, self.width),
+                            (self.width - 37, self.width // 2, 0)):
+                capture.reset_mock()
+                self.strip.begin_motion()
+                for offset in offsets:
+                    self.strip.get_page_adjustment().set_value(offset)
+                    self.render()
+                capture.assert_not_called()
+                self.strip.end_motion()
+                self.settle()
+                self.assertLessEqual(len(self.strip._surfaces), 3)
+
+    def test_unchanged_allocation_keeps_cache_but_label_change_refreshes_it(self):
+        self.settle()
+        original = self.strip._surfaces[self.pages[0]]
+        neighbor = self.strip._surfaces[self.pages[1]]
+        self.strip.emit("size-allocate", self.strip.get_allocation())
+        self.settle()
+        self.assertIs(self.strip._surfaces[self.pages[0]], original)
+        button = self.pages[0].get_children()[0]
+        button.set_label("Changed application name")
+        self.assertNotIn(self.pages[0], self.strip._surfaces)
+        self.assertIs(self.strip._surfaces[self.pages[1]], neighbor)
+        self.settle()
+        self.assertIsNot(self.strip._surfaces[self.pages[0]], original)
+
+    def test_destroyed_pages_are_removed_from_cache(self):
+        self.settle()
+        page = self.pages[0]
+        self.assertIn(page, self.strip._surfaces)
+        page.destroy()
+        self.assertNotIn(page, self.strip._surfaces)
+        self.window.hide()
+        self.assertIsNone(self.strip._warm_source)
+
+    def test_style_changes_do_not_rebuild_moving_page_each_frame(self):
+        self.settle()
+        capture = Mock(wraps=self.strip._capture_page)
+        self.strip._capture_page = capture
+        original = self.strip._surfaces[self.pages[0]]
+        button = self.pages[0].get_children()[0]
+        self.strip.begin_motion()
+        for offset in range(20, 100, 10):
+            button.emit("style-updated")
+            self.strip.get_page_adjustment().set_value(offset)
+            self.settle()
+            self.render()
+        capture.assert_not_called()
+        self.assertIs(self.strip._surfaces[self.pages[0]], original)
+        self.strip.end_motion()
+        self.assertNotIn(self.pages[0], self.strip._surfaces)
+        self.settle()
+        self.assertIsNot(self.strip._surfaces[self.pages[0]], original)
 
     def test_wallpaper_scroll_keeps_native_window_stationary_and_bounded(self):
         from gi.repository import GdkPixbuf
@@ -198,7 +258,7 @@ class HomePageDrawingTests(unittest.TestCase):
             self.assertEqual(window.get_width(), self.width)
             self.assertEqual(window.get_height(), self.height)
             self.assertEqual(self.Gtk.Scrollable.get_hadjustment(self.strip).get_value(), 0)
-            self.assertLessEqual(len(self.strip._surfaces), 2)
+            self.assertLessEqual(len(self.strip._surfaces), 3)
             moving = self.render(self.window)
             self.strip.end_motion()
             self.settle()

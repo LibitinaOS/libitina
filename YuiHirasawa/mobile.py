@@ -2,6 +2,7 @@
 
 from typing import Callable
 import math
+import weakref
 
 import cairo
 import gi
@@ -33,21 +34,107 @@ class HomePageStrip(Gtk.Layout):
         super().__init__()
         self._moving = False
         self._surfaces = {}
+        self._dirty_pages = set()
+        self._surface_geometry = None
+        self._warm_source = None
         # Keep the native window stationary and viewport-sized. Moving a wide,
         # transparent GdkWindow also updates clipping for every child window.
         # This adjustment scrolls our drawing, not Gtk.Layout's bin window.
         self._position = Gtk.Adjustment()
         self._position.connect("value-changed", self._position_changed)
-        self.connect("size-allocate", self._invalidate_surfaces)
+        self.connect("size-allocate", self._on_strip_allocate)
         self.connect("notify::scale-factor", self._invalidate_surfaces)
         self.connect("style-updated", self._invalidate_surfaces)
-        self.connect("unmap", self.end_motion)
+        self.connect("unmap", self._on_strip_unmap)
+        self.connect("destroy", self._stop_warming)
         self.connect("map", lambda *_args: self.queue_resize())
 
     def _invalidate_surfaces(self, *_args):
         self._surfaces.clear()
+        self._schedule_warming()
+
+    def _on_strip_allocate(self, *_args):
+        geometry = (self.get_allocated_width(), self.get_allocated_height(), self.get_scale_factor())
+        if geometry != self._surface_geometry:
+            self._surface_geometry = geometry
+            self._surfaces.clear()
+        self._schedule_warming()
+
+    def put(self, page, x, y):
+        Gtk.Layout.put(self, page, x, y)
+        # App tiles are static except for state, theme and property changes.
+        # Observe those changes without retaining destroyed pages in callbacks.
+        reference = weakref.ref(page)
+        pending = [page]
+        while pending:
+            widget = pending.pop()
+            for signal in ("state-flags-changed", "style-updated", "notify"):
+                widget.connect(signal, self._on_page_changed, reference)
+            if isinstance(widget, Gtk.Container):
+                pending.extend(widget.get_children())
+        self._invalidate_surfaces()
+
+    def do_remove(self, page):
+        self._surfaces.pop(page, None)
+        self._dirty_pages.discard(page)
+        Gtk.Layout.do_remove(self, page)
+
+    def _on_page_changed(self, _widget, *_args):
+        page = _args[-1]()
+        if page is not None:
+            if self._moving:
+                # Button hover/press transitions can update every frame. Keep
+                # the moving image stable and refresh it once motion ends.
+                self._dirty_pages.add(page)
+            else:
+                self._surfaces.pop(page, None)
+        self._schedule_warming()
+
+    def _stop_warming(self, *_args):
+        if self._warm_source is not None:
+            GLib.source_remove(self._warm_source)
+            self._warm_source = None
+
+    def _on_strip_unmap(self, *_args):
+        self._stop_warming()
+        self.end_motion()
+
+    def _schedule_warming(self):
+        if not self._moving and self.get_mapped() and self._warm_source is None:
+            self._warm_source = GLib.idle_add(self._warm_page, priority=GLib.PRIORITY_LOW)
+
+    def _nearby_pages(self, children, width):
+        center = int(self._position.get_value() / max(1, width) + 0.5)
+        return [children[i] for i in (center, center + 1, center - 1) if 0 <= i < len(children)]
+
+    def _capture_page(self, page, width, height):
+        if page.get_allocated_width() != width or page.get_allocated_height() != height:
+            return None
+        scale = self.get_scale_factor()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * scale, height * scale)
+        surface.set_device_scale(scale, scale)
+        page.draw(cairo.Context(surface))
+        self._surfaces[page] = surface
+        return surface
+
+    def _warm_page(self):
+        self._warm_source = None
+        if self._moving or not self.get_mapped():
+            return GLib.SOURCE_REMOVE
+        width, height = self.get_allocated_width(), self.get_allocated_height()
+        nearby = self._nearby_pages(self.get_children(), width)
+        self._surfaces = {page: surface for page, surface in self._surfaces.items() if page in nearby}
+        # Render one page per low-priority idle callback, outside gesture frames.
+        for page in nearby:
+            if page not in self._surfaces:
+                if self._capture_page(page, width, height) is not None:
+                    if any(other not in self._surfaces for other in nearby):
+                        self._schedule_warming()
+                break
+        return GLib.SOURCE_REMOVE
 
     def begin_motion(self):
+        self._stop_warming()
         self._moving = True
 
     def get_page_adjustment(self):
@@ -74,9 +161,12 @@ class HomePageStrip(Gtk.Layout):
 
     def end_motion(self, *_args):
         self._moving = False
-        self._surfaces.clear()
+        for page in self._dirty_pages:
+            self._surfaces.pop(page, None)
+        self._dirty_pages.clear()
         self._position_widgets()
         self.queue_draw()
+        self._schedule_warming()
 
     def do_draw(self, cr):
         if not self._moving:
@@ -92,25 +182,22 @@ class HomePageStrip(Gtk.Layout):
         children = self.get_children()
         first = int(position // max(1, width))
         visible = range(first, min(len(children), math.ceil((position + width) / max(1, width))))
-        self._surfaces = {i: surface for i, surface in self._surfaces.items() if i in visible}
+        nearby = self._nearby_pages(children, width)
+        self._surfaces = {page: surface for page, surface in self._surfaces.items() if page in nearby}
         cr.save()
         Gtk.cairo_transform_to_window(cr, self, window)
         cr.rectangle(0, 0, width, height)
         cr.clip()
         cr.translate(-position, 0)
         for index in visible:
-            surface = self._surfaces.get(index)
+            page = children[index]
+            surface = self._surfaces.get(page)
             if surface is None:
-                page = children[index]
                 # Do not snapshot an allocation GTK has not laid out yet.
-                if page.get_allocated_width() != width or page.get_allocated_height() != height:
+                surface = self._capture_page(page, width, height)
+                if surface is None:
                     cr.restore()
                     return Gtk.Layout.do_draw(self, cr)
-                scale = self.get_scale_factor()
-                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * scale, height * scale)
-                surface.set_device_scale(scale, scale)
-                page.draw(cairo.Context(surface))
-                self._surfaces[index] = surface
             cr.set_source_surface(surface, index * width, 0)
             cr.paint()
         cr.restore()

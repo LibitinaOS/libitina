@@ -15,6 +15,35 @@ from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, GtkLayerShell
 
 from settings import load_config, wallpaper_path
 
+def _show_cairo_issue(details):
+    dialog = Gtk.MessageDialog(
+        title="Wallpaper issue",
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.NONE,
+        text="Wallpaper issue",
+    )
+    dialog.format_secondary_text(
+        "Could not import PyGObject Cairo bridge. There is something wrong with "
+        "the Python. If this is debian, install python3-gi-cairo, if other please "
+        "consult your distro. Falled back to pixbuf for now. Additional details: "
+        f"{details}"
+    )
+    dialog.add_button("Okay", Gtk.ResponseType.OK)
+    dialog.connect("response", lambda widget, _response: widget.destroy())
+    dialog.show_all()
+    return GLib.SOURCE_REMOVE
+
+
+try:
+    gi.require_foreign("cairo", "Surface")
+except ImportError as exc:
+    _CAIRO_SURFACES = False
+    logging.warning("Cairo surface support unavailable %s", exc)
+    # Show once, after GTK's main loop starts, without blocking the shell.
+    GLib.idle_add(_show_cairo_issue, str(exc))
+else:
+    _CAIRO_SURFACES = True
+
 
 def internal_watermark_text():
     """Read host and checkout information without relying on the working directory."""
@@ -103,8 +132,11 @@ class Wallpaper(Gtk.Image):
         # Cairo would filter the entire wallpaper up to device resolution on
         # every redraw, including every frame of a transparent overlay swipe.
         # Prepare a surface at the output's pixel size once instead.
-        width *= device_scale
-        height *= device_scale
+        # Without the GI Cairo bridge, Gtk.Image can still display a pixbuf
+        # at logical resolution and let GTK handle the output scaling.
+        render_scale = device_scale if _CAIRO_SURFACES else 1
+        width *= render_scale
+        height *= render_scale
         source_width, source_height = self._source.get_width(), self._source.get_height()
         scale = max(width / source_width, height / source_height)
         scaled_width = max(width, math.ceil(source_width * scale))
@@ -116,8 +148,11 @@ class Wallpaper(Gtk.Image):
             cover, (scaled_width - width) // 2, (scaled_height - height) // 2,
             width, height,
         )
-        surface = Gdk.cairo_surface_create_from_pixbuf(cropped, device_scale, self.get_window())
-        self.set_from_surface(surface)
+        if _CAIRO_SURFACES:
+            surface = Gdk.cairo_surface_create_from_pixbuf(cropped, device_scale, self.get_window())
+            self.set_from_surface(surface)
+        else:
+            self.set_from_pixbuf(cropped)
         self._scaled_size = size
 
 
