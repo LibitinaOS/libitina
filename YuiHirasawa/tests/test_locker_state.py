@@ -1,8 +1,11 @@
 """Deterministic resize and keyboard-callback regressions without a display."""
 
+import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import cairo
 
 from test_locker_password import load_locker
 
@@ -46,6 +49,7 @@ class LockerStateTests(unittest.TestCase):
         window._offset = Position(page * 420)
         for name in ('_pages', '_entry', '_password_page', '_status', 'set_focus'):
             setattr(window, name, Mock())
+        window._pages.is_moving.return_value = False
         window.get_mapped = lambda: True
         return window
 
@@ -218,6 +222,11 @@ class LockerStateTests(unittest.TestCase):
         layout = object.__new__(self.module.LockPageLayout)
         layout._position = Position(360)
         layout._prepare_resize = Mock()
+        layout._moving = False
+        layout._rest_page = 0
+        layout._surfaces = {}
+        layout._surface_geometry = None
+        layout.get_scale_factor = lambda: 1
         layout.set_size = Mock()
         layout.move = Mock()
         pages = [Mock(), Mock()]
@@ -236,6 +245,111 @@ class LockerStateTests(unittest.TestCase):
         layout.move.reset_mock()
         layout.do_size_allocate(allocation)
         self.assertEqual([call.args[2] for call in layout.move.call_args_list], [0, 720])
+
+
+    def moving_layout(self):
+        layout = object.__new__(self.module.LockPageLayout)
+        layout._position = Position(0)
+        layout._prepare_resize = Mock()
+        layout._moving = False
+        layout._rest_page = 0
+        layout._surfaces = {}
+        layout._surface_geometry = None
+        layout.get_scale_factor = Mock(return_value=1)
+        layout.get_allocated_width = lambda: 4
+        layout.get_allocated_height = lambda: 8
+        layout.get_bin_window = Mock()
+        layout.get_style_context = Mock()
+        layout.queue_allocate = Mock()
+        layout.queue_draw = Mock()
+        layout.set_size = Mock()
+        layout.move = Mock()
+        pages = [Mock(), Mock()]
+        for page, color in zip(pages, ((1, 0, 0), (0, 0, 1))):
+            page.get_allocated_width.return_value = 4
+            page.get_allocated_height.return_value = 8
+            def draw(cr, color=color):
+                cr.set_source_rgb(*color)
+                cr.paint()
+            page.draw.side_effect = draw
+        layout.get_children = lambda: pages
+        return layout, pages
+
+    def test_drag_drawing_moves_pixels_without_relocating_input_windows(self):
+        layout, pages = self.moving_layout()
+        allocation = SimpleNamespace(width=4, height=8)
+        with patch.object(self.module.Gtk, 'Layout', SimpleNamespace(do_size_allocate=Mock())), \
+             patch.object(self.module.Gtk, 'cairo_should_draw_window', return_value=True, create=True), \
+             patch.object(self.module.Gtk, 'cairo_transform_to_window', create=True), \
+             patch.object(self.module.Gtk, 'render_background', create=True):
+            layout.do_size_allocate(allocation)
+            layout.begin_motion()
+            for offset in (3, 6):
+                layout._position.set_value(offset)
+                layout._position_changed()
+                layout.queue_allocate.assert_not_called()
+                # Other GTK allocations during a swipe must also keep the
+                # input windows at their original page positions.
+                layout.move.reset_mock()
+                layout.do_size_allocate(allocation)
+                self.assertEqual([call.args[2] for call in layout.move.call_args_list], [0, 8])
+                target = cairo.ImageSurface(cairo.FORMAT_ARGB32, 4, 8)
+                layout.do_draw(cairo.Context(target))
+                target.flush()
+                pixels = target.get_data()
+                self.assertEqual(int.from_bytes(pixels[0:4], sys.byteorder), 0xffff0000)
+                bottom = 7 * target.get_stride()
+                self.assertEqual(int.from_bytes(pixels[bottom:bottom+4], sys.byteorder), 0xff0000ff)
+            for page in pages:
+                page.draw.assert_called_once()
+            layout._position.set_value(8)
+            layout.end_motion()
+            self.assertFalse(layout.is_moving())
+            self.assertEqual(layout._surfaces, {})
+            layout.do_size_allocate(allocation)
+            self.assertEqual([call.args[2] for call in layout.move.call_args_list[-2:]], [-8, 0])
+
+    def test_page_larger_than_keyboard_viewport_still_slides(self):
+        layout, pages = self.moving_layout()
+        for page in pages:
+            page.get_allocated_height.return_value = 12
+        layout.begin_motion()
+        layout._position.set_value(3)
+        with patch.object(self.module.Gtk, 'cairo_should_draw_window', return_value=True, create=True), \
+             patch.object(self.module.Gtk, 'cairo_transform_to_window', create=True), \
+             patch.object(self.module.Gtk, 'render_background', create=True):
+            target = cairo.ImageSurface(cairo.FORMAT_ARGB32, 4, 8)
+            layout.do_draw(cairo.Context(target))
+        self.assertEqual(len(layout._surfaces), 2)
+        for surface in layout._surfaces.values():
+            self.assertEqual(surface.get_height(), 8)
+
+    def test_password_page_touch_target_stays_at_origin_during_return_swipe(self):
+        layout, _pages = self.moving_layout()
+        allocation = SimpleNamespace(width=4, height=8)
+        with patch.object(self.module.Gtk, 'Layout', SimpleNamespace(do_size_allocate=Mock())):
+            layout._position.set_value(8)
+            layout.do_size_allocate(allocation)
+            layout.begin_motion()
+            for offset in (6, 3, 0):
+                layout._position.set_value(offset)
+                layout.move.reset_mock()
+                layout.do_size_allocate(allocation)
+                self.assertEqual([call.args[2] for call in layout.move.call_args_list], [-8, 0])
+            layout.end_motion()
+            layout.do_size_allocate(allocation)
+            self.assertEqual([call.args[2] for call in layout.move.call_args_list[-2:]], [0, 8])
+
+    def test_interrupted_snap_near_endpoint_still_restores_live_controls(self):
+        window = self.screen(0)
+        window._page = 1
+        window._offset.set_value(419.8)
+        window._pages.is_moving.return_value = True
+        window._on_drag_begin(Mock(), 100, 200)
+        window._on_drag_end(Mock(), 0, 0)
+        self.assertEqual(window._offset.get_value(), 420)
+        window._pages.end_motion.assert_called_once()
+        window._password_page.set_sensitive.assert_called_with(True)
 
 
 if __name__ == '__main__':

@@ -12,6 +12,7 @@ import os
 import pwd
 import threading
 from dataclasses import dataclass
+import cairo
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
@@ -140,29 +141,93 @@ class PamAuthenticator:
         text = self._pam.pam_strerror(handle, status)
         return text.decode("utf-8", errors="replace") if text else "PAM error"
 class LockPageLayout(Gtk.Layout):
-    """Allocate both pages before GTK lays out their contents and input windows."""
+    """Keep touch targets stationary while compositing the two moving pages."""
 
     def __init__(self, position, prepare_resize):
         super().__init__()
         self._position = position
         self._prepare_resize = prepare_resize
+        self._moving = False
+        self._rest_page = 0
+        self._surfaces = {}
+        self._surface_geometry = None
         position.connect("value-changed", self._position_changed)
 
-    def _position_changed(self, *_args):
+    def is_moving(self):
+        return self._moving
+
+    def begin_motion(self):
+        if not self._moving:
+            self._surfaces.clear()
+            self._moving = True
+
+    def end_motion(self):
+        if not self._moving:
+            return
+        self._moving = False
+        self._surfaces.clear()
+        height = max(1, self.get_allocated_height())
+        self._rest_page = int(self._position.get_value() / height + 0.5)
         self.queue_allocate()
+        self.queue_draw()
+
+    def _position_changed(self, *_args):
+        if not self._moving:
+            self.queue_allocate()
         self.queue_draw()
 
     def do_size_allocate(self, allocation):
         self._prepare_resize(self, allocation)
         width, height = max(1, allocation.width), max(1, allocation.height)
+        geometry = (width, height, self.get_scale_factor())
+        if geometry != self._surface_geometry:
+            self._surface_geometry = geometry
+            self._surfaces.clear()
         # Keep GTK's scrollable area at viewport size. The gesture owns a
         # separate position, so focus and keyboard resizes cannot scroll it.
         self.set_size(width, height)
-        position = round(self._position.get_value())
+        position = self._rest_page * height if self._moving else round(self._position.get_value())
+        if not self._moving:
+            self._rest_page = int(position / height + 0.5)
         for index, page in enumerate(self.get_children()):
             page.set_size_request(width, height)
             self.move(page, 0, index * height - position)
         Gtk.Layout.do_size_allocate(self, allocation)
+
+    def do_draw(self, cr):
+        if not self._moving:
+            return Gtk.Layout.do_draw(self, cr)
+        window = self.get_bin_window()
+        if not Gtk.cairo_should_draw_window(cr, window):
+            return False
+        width, height = self.get_allocated_width(), self.get_allocated_height()
+        scale = self.get_scale_factor()
+        position = round(self._position.get_value())
+        cr.save()
+        Gtk.cairo_transform_to_window(cr, self, window)
+        cr.rectangle(0, 0, width, height)
+        cr.clip()
+        Gtk.render_background(self.get_style_context(), cr, 0, 0, width, height)
+        for index, page in enumerate(self.get_children()):
+            y = index * height - position
+            if y >= height or y + height <= 0:
+                continue
+            surface = self._surfaces.get(page)
+            if surface is None:
+                # GTK can allocate a page above the viewport's size when the
+                # keyboard leaves less room than its natural minimum. Crop
+                # that page to the viewport instead of freezing on live drawing.
+                if page.get_allocated_width() < width or page.get_allocated_height() < height:
+                    cr.restore()
+                    return Gtk.Layout.do_draw(self, cr)
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * scale, height * scale)
+                surface.set_device_scale(scale, scale)
+                page.draw(cairo.Context(surface))
+                self._surfaces[page] = surface
+            cr.set_source_surface(surface, 0, y)
+            cr.paint()
+        cr.restore()
+        return False
 
 
 class LockScreen(Gtk.Window):
@@ -338,6 +403,7 @@ class LockScreen(Gtk.Window):
         self._drag.reset()
         self._stop_snap()
         self._offset.set_value(self._page * self._page_height)
+        self._pages.end_motion()
 
     def _on_map(self, *_args):
         # A cancelled touch must not retain ownership after suspend/remap.
@@ -364,6 +430,7 @@ class LockScreen(Gtk.Window):
         if not self._drag_claimed and abs(dy) >= 10 and abs(dy) > abs(dx):
             self._drag_claimed = True
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self._pages.begin_motion()
             # Keep the original input window and keyboard stable until
             # release. Disabling the pressed child or hiding its input method
             # here can cancel this very gesture during the resulting resize.
@@ -382,7 +449,7 @@ class LockScreen(Gtk.Window):
             target = 1
         else:
             target = self._page
-        settle = (self._drag_claimed or target != self._page
+        settle = (self._drag_claimed or self._pages.is_moving() or target != self._page
                   or abs(self._offset.get_value() - target * self._page_height) > 0.5)
         self._drag_active = False
         self._drag_claimed = False
@@ -395,7 +462,7 @@ class LockScreen(Gtk.Window):
     def _on_drag_cancel(self, *_args):
         if not self._drag_active:
             return
-        settle = (self._drag_claimed
+        settle = (self._drag_claimed or self._pages.is_moving()
                   or abs(self._offset.get_value() - self._page * self._page_height) > 0.5)
         self._drag_active = False
         self._drag_claimed = False
@@ -423,6 +490,7 @@ class LockScreen(Gtk.Window):
             self._finish_page()
 
     def _start_snap(self, start, target):
+        self._pages.begin_motion()
         self._snap_start = start
         self._snap_target = target
         self._snap_started = GLib.get_monotonic_time()
@@ -441,6 +509,7 @@ class LockScreen(Gtk.Window):
     def _finish_page(self):
         # Pin the endpoint before allowing entry focus / keyboard activation.
         self._offset.set_value(self._page * self._page_height)
+        self._pages.end_motion()
         self._password_page.set_sensitive(self._page == 1)
         if self._page == 1 and not self._authenticating:
             self._entry.grab_focus()
