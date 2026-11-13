@@ -76,6 +76,29 @@ class AppSettingsTests(unittest.TestCase):
                 settings.set_wallpaper(value)
             self.assertEqual(self.path.read_bytes(), saved)
 
+    def test_lock_wallpaper_is_independent_and_round_trips(self):
+        settings.set_wallpaper("shibuya")
+        settings.set_wallpaper_enabled(False)
+        for value in ("zohran", "shibuya", "/tmp/custom lock.png"):
+            settings.set_wallpaper(value, lock_screen=True)
+            config = settings.load_config()
+            self.assertEqual(config["lock_wallpaper"], value)
+            self.assertEqual(settings.wallpaper_path(config, key="lock_wallpaper"),
+                             settings.wallpaper_path({"wallpaper": value}))
+            self.assertEqual(config["wallpaper"], "shibuya")
+            self.assertFalse(config["wallpaper_enabled"])
+        saved = self.path.read_bytes()
+        for invalid in (None, [], "relative.png"):
+            with self.assertRaises(ValueError):
+                settings.set_wallpaper(invalid, lock_screen=True)
+            self.assertEqual(self.path.read_bytes(), saved)
+
+    def test_old_and_invalid_lock_wallpaper_configs_use_default(self):
+        self.path.parent.mkdir()
+        for data in ({}, {"lock_wallpaper": []}, {"lock_wallpaper": "relative.png"}):
+            self.path.write_text(json.dumps(data))
+            self.assertEqual(settings.load_config()["lock_wallpaper"], "zohran")
+
     def test_old_and_malformed_wallpaper_configs_use_default(self):
         self.path.parent.mkdir()
         for data in ({}, {"wallpaper": []}, {"wallpaper": "relative.png"}):

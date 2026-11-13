@@ -67,8 +67,9 @@ def internal_watermark_text():
 
 
 class Wallpaper(Gtk.Image):
-    def __init__(self):
+    def __init__(self, *, lock_screen=False):
         super().__init__()
+        self._lock_screen = lock_screen
         self.set_hexpand(True)
         self.set_vexpand(True)
         self._state = None
@@ -88,7 +89,8 @@ class Wallpaper(Gtk.Image):
 
     def _sync(self):
         config = load_config()
-        state = (config["wallpaper_enabled"], str(wallpaper_path(config)))
+        state = (True if self._lock_screen else config["wallpaper_enabled"],
+                 str(wallpaper_path(config, key="lock_wallpaper" if self._lock_screen else "wallpaper")))
         if state != self._state:
             self._state = state
             self._source = None

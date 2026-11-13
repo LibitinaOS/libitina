@@ -28,6 +28,7 @@ MOBILE_LAYOUT_DEFAULTS = {
 DEFAULT_CONFIG: dict[str, Any] = {
     "mobile_layout": MOBILE_LAYOUT_DEFAULTS.copy(),
     "wallpaper": "zohran", "wallpaper_enabled": True, "shell": "desktop", "software_rendering_apps": [],
+    "lock_wallpaper": "zohran",
     "squeekboard_enabled": False,
     "show_internal_watermark": True,
     "enable_lille": False,
@@ -50,17 +51,17 @@ def validate_wallpaper(value: str) -> str:
     return value
 
 
-def wallpaper_path(config=None) -> Path:
-    value = (load_config() if config is None else config)["wallpaper"]
+def wallpaper_path(config=None, *, key="wallpaper") -> Path:
+    value = (load_config() if config is None else config).get(key, "zohran")
     if value in WALLPAPERS:
         return Path(__file__).resolve().parent / "assets/icons/backgrounds" / WALLPAPERS[value]
     return Path(value)
 
 
-def set_wallpaper(value: str) -> None:
+def set_wallpaper(value: str, *, lock_screen: bool = False) -> None:
     value = validate_wallpaper(value)
     config = load_config()
-    config["wallpaper"] = value
+    config["lock_wallpaper" if lock_screen else "wallpaper"] = value
     save_config(config)
 
 
@@ -143,6 +144,10 @@ def load_config() -> dict[str, Any]:
         wallpaper = validate_wallpaper(data.get("wallpaper", "zohran"))
     except ValueError:
         wallpaper = "zohran"
+    try:
+        lock_wallpaper = validate_wallpaper(data.get("lock_wallpaper", "zohran"))
+    except ValueError:
+        lock_wallpaper = "zohran"
     value = data.get("wallpaper_enabled")
     shell = data.get("shell")
     app_ids = data.get("software_rendering_apps", [])
@@ -162,6 +167,7 @@ def load_config() -> dict[str, Any]:
         **lille_values,
         "mobile_layout": validate_mobile_layout(data.get("mobile_layout", {}), strict=False),
         "wallpaper": wallpaper,
+        "lock_wallpaper": lock_wallpaper,
         "wallpaper_enabled": value
         if isinstance(value, bool)
         else DEFAULT_CONFIG["wallpaper_enabled"],
@@ -200,6 +206,7 @@ def save_config(config: Mapping[str, Any]) -> None:
     mobile_layout = validate_mobile_layout(config.get("mobile_layout", {}))
     lille_values = validate_lille(config)
     wallpaper = validate_wallpaper(config.get("wallpaper", "zohran"))
+    lock_wallpaper = validate_wallpaper(config.get("lock_wallpaper", "zohran"))
     shell = config.get("shell", DEFAULT_CONFIG["shell"])
     if shell not in SHELL_OPTIONS:
         raise ValueError("shell must be 'desktop' or 'mobile'")
@@ -219,6 +226,7 @@ def save_config(config: Mapping[str, Any]) -> None:
             json.dump(
                 {**config, **lille_values, "mobile_layout": mobile_layout,
                  "wallpaper": wallpaper, "wallpaper_enabled": wallpaper_enabled_value,
+                 "lock_wallpaper": lock_wallpaper,
                  "shell": shell, "software_rendering_apps": app_ids,
                  "squeekboard_enabled": squeekboard_enabled,
                  "enable_lille": lille_enabled,

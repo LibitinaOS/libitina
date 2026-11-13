@@ -194,7 +194,18 @@ apply this change. Programs that redirect their own output or use D-Bus activati
 manage their logs separately.
 
 The lock screen accepts your current Unix account password through PAM, including
-letters, digits, punctuation, and Unicode. Type in the masked Password field and
+letters, digits, punctuation, and Unicode. It opens on a wallpaper with the time
+and date. Swipe up to reveal password entry. In the desktop shell, clicking or
+pressing Enter/Space also reveals the prompt; typing starts password entry.
+Only desktop mode displays the username above the password field. Use **Back**
+or Escape to return to the clock and clear the password.
+
+Choose an independent lock screen wallpaper in **Settings → Wallpaper → Lock
+screen**, using a bundled wallpaper or a custom image. The `lock_wallpaper`
+setting in `~/.config/yui/config.json` accepts `zohran` (default), `shibuya`, or an
+absolute image path, independently of the desktop wallpaper toggle.
+
+Type in the masked Password field and
 press Enter or **Unlock**. Tap **On-screen keyboard** to request squeekboard via
 its session D-Bus interface; the password field remains focused for typing.
 

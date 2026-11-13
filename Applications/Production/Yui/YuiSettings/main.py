@@ -254,11 +254,42 @@ class SettingsWindow(Handy.ApplicationWindow):
             callback=self._choose_wallpaper,
         )
         self._wallpaper_choice.connect("changed", self._on_wallpaper_selected)
+        lock_group = group(page.body, "Lock screen")
+        self._saved_lock_wallpaper = config.get("lock_wallpaper", "zohran")
+        self._lock_wallpaper_choice = Gtk.ComboBoxText()
+        for value, title in (("zohran", "Zohran"), ("shibuya", "Shibuya"), ("custom", "Custom image")):
+            self._lock_wallpaper_choice.append(value, title)
+        self._restore_lock_wallpaper_choice()
+        action_row(lock_group, "Lock screen image", suffix=self._lock_wallpaper_choice)
+        self._custom_lock_wallpaper_row = action_row(
+            lock_group, "Choose custom lock screen image…",
+            self._saved_lock_wallpaper if self._saved_lock_wallpaper not in ("zohran", "shibuya")
+            else "Select an image file",
+            callback=lambda: self._choose_wallpaper(lock_screen=True),
+        )
+        self._lock_wallpaper_choice.connect("changed", self._on_lock_wallpaper_selected)
         self._stack.add_titled(page, "wallpaper", "Wallpaper")
 
-    def _save_wallpaper_selection(self, value):
+    def _restore_lock_wallpaper_choice(self):
+        self._lock_wallpaper_choice.set_active_id(
+            self._saved_lock_wallpaper if self._saved_lock_wallpaper in ("zohran", "shibuya") else "custom")
+
+    def _on_lock_wallpaper_selected(self, widget):
+        value = widget.get_active_id()
+        if value == "custom":
+            self._choose_wallpaper(lock_screen=True)
+        else:
+            self._save_wallpaper_selection(value, lock_screen=True)
+        widget.handler_block_by_func(self._on_lock_wallpaper_selected)
+        self._restore_lock_wallpaper_choice()
+        widget.handler_unblock_by_func(self._on_lock_wallpaper_selected)
+
+    def _save_wallpaper_selection(self, value, *, lock_screen=False):
         try:
-            set_wallpaper(value)
+            if lock_screen:
+                set_wallpaper(value, lock_screen=True)
+            else:
+                set_wallpaper(value)
         except (OSError, ValueError) as exc:
             dialog = Gtk.MessageDialog(
                 transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
@@ -268,7 +299,10 @@ class SettingsWindow(Handy.ApplicationWindow):
             dialog.run()
             dialog.destroy()
             return False
-        self._saved_wallpaper = value
+        if lock_screen:
+            self._saved_lock_wallpaper = value
+        else:
+            self._saved_wallpaper = value
         return True
 
     def _restore_wallpaper_choice(self):
@@ -289,9 +323,10 @@ class SettingsWindow(Handy.ApplicationWindow):
         elif not self._save_wallpaper_selection(value):
             self._restore_wallpaper_choice()
 
-    def _choose_wallpaper(self):
+    def _choose_wallpaper(self, *, lock_screen=False):
         dialog = Gtk.FileChooserDialog(
-            title="Choose wallpaper", transient_for=self, action=Gtk.FileChooserAction.OPEN,
+            title="Choose lock screen wallpaper" if lock_screen else "Choose wallpaper",
+            transient_for=self, action=Gtk.FileChooserAction.OPEN,
         )
         dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK)
         image_filter = Gtk.FileFilter()
@@ -311,11 +346,19 @@ class SettingsWindow(Handy.ApplicationWindow):
                 error.run()
                 error.destroy()
             else:
-                if self._save_wallpaper_selection(filename):
-                    self._custom_wallpaper = filename
-                    self._custom_wallpaper_row.set_subtitle(filename)
+                if self._save_wallpaper_selection(filename, lock_screen=lock_screen):
+                    if lock_screen:
+                        self._custom_lock_wallpaper_row.set_subtitle(filename)
+                    else:
+                        self._custom_wallpaper = filename
+                        self._custom_wallpaper_row.set_subtitle(filename)
         dialog.destroy()
-        self._restore_wallpaper_choice()
+        if lock_screen:
+            self._lock_wallpaper_choice.handler_block_by_func(self._on_lock_wallpaper_selected)
+            self._restore_lock_wallpaper_choice()
+            self._lock_wallpaper_choice.handler_unblock_by_func(self._on_lock_wallpaper_selected)
+        else:
+            self._restore_wallpaper_choice()
 
     def _add_appearance_page(self) -> None:
         page = PreferencesPage()

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def renderer_module():
     gi = ModuleType("gi")
     gi.require_version = Mock()
+    gi.require_foreign = Mock()
     repository = ModuleType("gi.repository")
     repository.Gtk = SimpleNamespace(Image=object)
     repository.Gdk = Mock()
