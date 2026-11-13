@@ -103,6 +103,7 @@ class DesktopAnimationTests(unittest.TestCase):
         namespace["open_animated_panel"] = Mock()
         exec(compile(ast.Module(body=[show], type_ignores=[]), "control_center.py", "exec"), namespace)
         controls = Mock()
+        controls.locked = False
         namespace["show"](controls)
         namespace["open_animated_panel"].assert_called_once_with(controls.dialog)
         controls._create_dialog.assert_not_called()

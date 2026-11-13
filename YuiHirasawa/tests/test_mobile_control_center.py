@@ -22,6 +22,11 @@ def load_shade():
     shared = ModuleType('control_center')
 
     class Controls:
+        def _set_locked(self, locked):
+            self.locked = locked
+            if locked and self.dialog:
+                self.dialog.destroy()
+
         def _create_dialog(self):
             self.dialog = Mock()
 
@@ -48,6 +53,8 @@ class MobileControlCenterTests(unittest.TestCase):
         self.addCleanup(layout_patch.stop)
         self.shade = self.module.MobileStatusControls.__new__(self.module.MobileStatusControls)
         self.shade.parent = Mock()
+        self.shade.locked = False
+        self.shade._pull = Mock()
         self.shade.parent.get_allocated_height.return_value = 16
         self.shade._height = 800
         self.shade._reveal = 0
@@ -75,6 +82,27 @@ class MobileControlCenterTests(unittest.TestCase):
             self.pull(y=y)
             self.assertIsNone(self.shade.dialog)
         self.gesture.set_state.assert_not_called()
+
+    def test_lock_blocks_status_clicks_and_pull_gestures(self):
+        self.shade._set_locked(True)
+        self.shade.show()
+        self.pull()
+        self.shade._drag_end(self.gesture, 0, 150)
+        self.assertIsNone(self.shade.dialog)
+        self.gesture.set_state.assert_not_called()
+
+    def test_lock_closes_in_progress_shade_and_unlock_restores_pulling(self):
+        self.pull()
+        dialog = self.shade.dialog
+        self.shade._set_locked(True)
+        dialog.destroy.assert_called_once()
+        self.assertFalse(self.shade._dragging)
+        self.assertFalse(self.shade._eligible)
+        self.shade._pull.reset.assert_called_once()
+        self.shade._dialog_closed()
+        self.shade._set_locked(False)
+        self.pull()
+        self.assertIsNotNone(self.shade.dialog)
 
     def test_configured_status_height_and_shade_safe_area(self):
         self.shade.parent.get_allocated_height.return_value = 64

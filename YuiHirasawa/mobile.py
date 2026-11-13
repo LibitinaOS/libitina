@@ -22,6 +22,7 @@ from backend import (
 from mobile_layout import load_layout, inset_content
 from mobile_control_center import MobileStatusControls
 from launcher_control import LauncherControl
+from lock_state import LockStateMonitor
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu
 from wallpaper import Wallpaper
@@ -1031,6 +1032,8 @@ class Taskbar(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Taskbar")
+        self._screen_locked = True
+        self.set_no_show_all(True)
         self.layout = load_layout()
         self.HEIGHT = self.layout["navigation_bar_height"] + self.layout["safe_inset_bottom"]
         self.OSK_HEIGHT = self.layout["navigation_bar_osk_height"] + self.layout["safe_inset_bottom"]
@@ -1085,6 +1088,20 @@ class Taskbar(Gtk.Window):
         self.resize(1, 1)
         self._keyboard_monitor = KeyboardVisibilityMonitor(self._set_osk_visible)
         GLib.idle_add(self._show_initial_launcher)
+        self._lock_watch = LockStateMonitor(self._set_screen_locked)
+        self.connect("destroy", lambda *_: self._lock_watch.close())
+
+    def _set_screen_locked(self, locked):
+        self._screen_locked = locked
+        self.set_no_show_all(locked)
+        if locked:
+            self.hide()
+            self._running.hide()
+            self._launcher.set_locked_open(False)
+            self._launcher.hide()
+        else:
+            self.show_all()
+            self._launcher.set_locked_open(self._no_running_programs)
 
     def _set_osk_visible(self, visible: bool) -> None:
         if visible == self._osk_visible:
@@ -1105,14 +1122,15 @@ class Taskbar(Gtk.Window):
         self.queue_resize()
 
     def _show_initial_launcher(self) -> bool:
-        if self._no_running_programs:
+        if self._no_running_programs and not self._screen_locked:
             self._launcher.set_locked_open(True)
         return GLib.SOURCE_REMOVE
 
     def _on_running_changed(self, has_running: bool) -> None:
         had_no_running_programs = self._no_running_programs
         self._no_running_programs = not has_running
-        self._launcher.set_locked_open(self._no_running_programs)
+        if not self._screen_locked:
+            self._launcher.set_locked_open(self._no_running_programs)
         if has_running and had_no_running_programs:
             self._launcher.hide()
 

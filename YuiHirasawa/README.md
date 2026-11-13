@@ -205,6 +205,13 @@ screen**, using a bundled wallpaper or a custom image. The `lock_wallpaper`
 setting in `~/.config/yui/config.json` accepts `zohran` (default), `shibuya`, or an
 absolute image path, independently of the desktop wallpaper toggle.
 
+While the locker is running, the mobile navigation bar is hidden. The status
+bar stays visible and continues updating, but status-button clicks and pull-down
+gestures cannot open the control center. Any open control center closes when
+locking, including in desktop mode. Navigation and control-center access return
+when the locker exits. The shell observes the locker's session-bus name, so a
+shell started while already locked also applies these restrictions.
+
 Type in the masked Password field and
 press Enter or **Unlock**. Tap **On-screen keyboard** to request squeekboard via
 its session D-Bus interface; the password field remains focused for typing.

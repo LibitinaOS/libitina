@@ -37,6 +37,7 @@ class ControlCenterGtkTests(unittest.TestCase):
         control = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                        and node.name == 'StatusControls')
         namespace.update(Gdk=Gdk, GtkLayerShell=Mock(), backend=Mock(),
+                         LockStateMonitor=lambda changed: (changed(False), Mock())[1],
                          create_power_menu=Mock(side_effect=lambda *args: Gtk.Menu()),
                          _prepare_launcher_dialog=lambda *args: None)
         exec(compile(ast.Module(body=[control], type_ignores=[]), 'control_center.py', 'exec'), namespace)

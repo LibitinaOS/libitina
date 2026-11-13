@@ -29,6 +29,16 @@ class MobileStatusControls(StatusControls):
         gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         return gesture
 
+    def _set_locked(self, locked):
+        if locked:
+            self._eligible = False
+            self._dragging = False
+            self._stop_animation()
+            self._pull.reset()
+            if hasattr(self, '_dismiss'):
+                self._dismiss.reset()
+        super()._set_locked(locked)
+
     def _create_dialog(self):
         super()._create_dialog()
         monitor = self.parent.get_display().get_monitor_at_window(self.parent.get_window())
@@ -51,6 +61,8 @@ class MobileStatusControls(StatusControls):
         self._dismiss.connect('cancel', self._drag_cancel)
 
     def show(self, *_):
+        if self.locked:
+            return
         if not self.dialog:
             self._create_dialog()
             self._position(0)
@@ -70,7 +82,7 @@ class MobileStatusControls(StatusControls):
                                      round(self._reveal - self._height))
 
     def _pull_begin(self, _gesture, _x, y):
-        self._eligible = 0 <= y <= self.parent.get_allocated_height()
+        self._eligible = not self.locked and 0 <= y <= self.parent.get_allocated_height()
         self._dragging = False
         self._origin = 0
 
@@ -81,7 +93,7 @@ class MobileStatusControls(StatusControls):
         self._origin = self._reveal
 
     def _drag_update(self, gesture, dx, dy):
-        if not self._eligible:
+        if self.locked or not self._eligible:
             return
         if not self._dragging:
             direction_ok = dy > 0 if self._origin == 0 else dy < 0
@@ -114,6 +126,8 @@ class MobileStatusControls(StatusControls):
         self._eligible = False
 
     def _settle(self, opened):
+        if self.locked:
+            return
         self._stop_animation()
         self._target = self._height if opened else 0
         self._start = self._reveal

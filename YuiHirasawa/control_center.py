@@ -6,6 +6,7 @@ from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 import status_backend as backend
 from power_menu import create_power_menu
+from lock_state import LockStateMonitor
 from shell_widgets import _prepare_launcher_dialog, round_window_corners, slide_panel_from_right, close_animated_panel, open_animated_panel
 
 
@@ -22,9 +23,24 @@ class StatusControls:
         self.delays = {}
         self.error = ''
         self._syncing = False
+        # Stay disabled until the initial bus-name lookup resolves.
+        self.locked = True
         self._timer = GLib.timeout_add_seconds(3, self.refresh)
         parent.connect('destroy', self.close)
         self.refresh()
+        self._lock_watch = LockStateMonitor(self._set_locked)
+
+    def _set_locked(self, locked):
+        self.locked = locked
+        for button in self.buttons.values():
+            button.set_sensitive(not locked)
+        if locked:
+            for source in self.delays.values():
+                GLib.source_remove(source)
+            self.delays.clear()
+            self.pending.clear()
+            if self.dialog:
+                self.dialog.destroy()
 
     def button(self, kind):
         button = Gtk.Button()
@@ -34,6 +50,7 @@ class StatusControls:
         button.add(image)
         button.set_tooltip_text('Reading status…')
         button.connect('clicked', self.show)
+        button.set_sensitive(not self.locked)
         self.buttons[kind] = button
         self._update_buttons()
         return button
@@ -84,7 +101,7 @@ class StatusControls:
         return True
 
     def change(self, key, operation, debounce=False):
-        if self._syncing:
+        if self._syncing or self.locked:
             return
         if key in self.delays:
             GLib.source_remove(self.delays.pop(key))
@@ -99,6 +116,8 @@ class StatusControls:
             commit()
 
     def show(self, *_):
+        if self.locked:
+            return
         if self.dialog:
             if self.bottom_right:
                 open_animated_panel(self.dialog)
@@ -260,6 +279,7 @@ class StatusControls:
 
     def close(self, *_):
         self.alive = False
+        self._lock_watch.close()
         GLib.source_remove(self._timer)
         for source in self.delays.values():
             GLib.source_remove(source)

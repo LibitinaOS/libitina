@@ -540,15 +540,21 @@ class LockScreen(Gtk.Window):
         self._date_label.set_text(now.strftime("%a, %b %-d"))
         return GLib.SOURCE_CONTINUE
 def main() -> int:
+    from lock_state import LockPresence
+
     service = os.environ.get("YUI_PAM_SERVICE", "login")
     try:
         authenticator = PamAuthenticator(service)
     except RuntimeError as error:
         print(f"locker: {error}", file=os.sys.stderr)
         return 1
-    locker = LockScreen(authenticator)
-    locker.show_all()
-    Gtk.main()
+    presence = LockPresence()
+    try:
+        locker = LockScreen(authenticator)
+        locker.show_all()
+        Gtk.main()
+    finally:
+        presence.close()
     return 0
 if __name__ == "__main__":
     raise SystemExit(main())

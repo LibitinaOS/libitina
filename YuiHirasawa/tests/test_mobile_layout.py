@@ -83,7 +83,8 @@ def bar_class(name, layout):
     namespace = dict(Gtk=gtk, GtkLayerShell=Mock(), GLib=Mock(),
                      load_layout=lambda: layout, inset_content=inset_content,
                      MobileStatusControls=Mock(), ApplicationLauncher=Mock(),
-                     LauncherControl=Mock(), RunningWindow=Mock(), KeyboardVisibilityMonitor=Mock())
+                     LauncherControl=Mock(), RunningWindow=Mock(), KeyboardVisibilityMonitor=Mock(),
+                     LockStateMonitor=Mock())
     exec(compile(ast.Module(body=[node], type_ignores=[]), 'mobile.py', 'exec'), namespace)
     return namespace[name], namespace
 
@@ -119,6 +120,25 @@ class MobileBarLayoutTests(unittest.TestCase):
             bar.set_size_request.assert_called_with(-1, total)
             bar._bar.set_size_request.assert_called_with(-1, content)
             ns['GtkLayerShell'].auto_exclusive_zone_enable.assert_called_with(bar)
+
+    def test_lock_hides_navigation_and_keyboard_updates_do_not_show_it(self):
+        cls, _ns = bar_class('Taskbar', self.layout)
+        bar = cls()
+        bar._set_screen_locked(True)
+        bar.hide.assert_called_once()
+        bar.set_no_show_all.assert_called_with(True)
+        bar._running.hide.assert_called_once()
+        bar._launcher.hide.assert_called_once()
+        bar._on_running_changed(False)
+        bar._show_initial_launcher()
+        bar._set_osk_visible(True)
+        bar._set_osk_visible(False)
+        bar.show_all.assert_not_called()
+        bar._launcher.set_locked_open.assert_called_once_with(False)
+        bar._set_screen_locked(False)
+        bar.set_no_show_all.assert_called_with(False)
+        bar.show_all.assert_called_once()
+        bar._launcher.set_locked_open.assert_called_with(True)
 
 
 if __name__ == '__main__':
