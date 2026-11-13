@@ -57,7 +57,7 @@ class LockerStateTests(unittest.TestCase):
         window._layout_pages(None, SimpleNamespace(width=360, height=720))
         self.assertAlmostEqual(window._offset.get_value(), 504)
         window._entry.grab_focus.assert_not_called()
-        window._password_page.set_sensitive.assert_called_once_with(False)
+        window._password_page.set_sensitive.assert_not_called()
         window._on_drag_update(Mock(), 0, 166)
         self.assertAlmostEqual(window._offset.get_value(), 464)
         window._on_drag_end(Mock(), 0, 166)
@@ -78,6 +78,76 @@ class LockerStateTests(unittest.TestCase):
         window._entry.grab_focus.assert_not_called()
         window.set_focus.assert_not_called()
         self.assertIsNone(window._snap_source)
+
+    def test_swipe_keeps_its_input_target_and_keyboard_until_release(self):
+        for page, dy in ((0, -150), (1, 150)):
+            with self.subTest(page=page):
+                window = self.screen(page)
+                # GTK may cancel the sequence when its pressed child becomes
+                # insensitive or the keyboard/focus change unmaps its surface.
+                def cancel(*_args):
+                    window._on_drag_cancel()
+                window._password_page.set_sensitive.side_effect = cancel
+                window.set_focus.side_effect = cancel
+                window._set_keyboard_visible = Mock(side_effect=cancel)
+                window._on_drag_begin(Mock(), 100, 200)
+                window._on_drag_update(Mock(), 0, dy)
+                self.assertTrue(window._drag_active)
+                self.assertTrue(window._drag_claimed)
+                self.assertEqual(window._offset.get_value(), page * 420 - dy)
+                window._password_page.set_sensitive.assert_not_called()
+                window.set_focus.assert_not_called()
+                window._set_keyboard_visible.assert_not_called()
+                window._on_drag_end(Mock(), 0, dy)
+                self.assertFalse(window._drag_active)
+                self.assertEqual(window._page, 1 - page)
+
+    def test_cancelled_sequences_ignore_late_motion_and_release_then_allow_new_swipe(self):
+        window = self.screen(0)
+        window._on_drag_begin(Mock(), 100, 300)
+        window._on_drag_update(Mock(), 0, -100)
+        window._on_drag_cancel()
+        snap = window._snap_source
+        window._on_drag_update(Mock(), 0, -300)
+        window._on_drag_end(Mock(), 0, -300)
+        self.assertEqual(window._page, 0)
+        self.assertEqual(window._offset.get_value(), 100)
+        self.assertIs(window._snap_source, snap)
+        window._on_drag_begin(Mock(), 100, 300)
+        window._on_drag_update(Mock(), 0, -200)
+        window._on_drag_end(Mock(), 0, -200)
+        self.assertEqual(window._page, 1)
+        window._animate_snap(None, SimpleNamespace(get_frame_time=lambda: 10**30))
+        self.assertEqual(window._offset.get_value(), 420)
+
+    def test_remap_resets_claimed_gesture_and_restores_swiping(self):
+        window = self.screen(0)
+        window._drag = Mock()
+        window._on_drag_begin(Mock(), 100, 300)
+        window._on_drag_update(Mock(), 0, -100)
+        window._on_unmap()
+        self.assertFalse(window._drag_active)
+        self.assertFalse(window._drag_claimed)
+        self.assertEqual(window._offset.get_value(), 0)
+        window._on_map()
+        window._on_drag_begin(Mock(), 100, 300)
+        window._on_drag_update(Mock(), 0, -200)
+        self.assertEqual(window._offset.get_value(), 200)
+        window._on_drag_end(Mock(), 0, -200)
+        self.assertEqual(window._page, 1)
+
+    def test_repeated_swipes_in_both_directions_after_cancellation(self):
+        window = self.screen(0)
+        for _ in range(5):
+            for page, dy in ((0, -150), (1, 150)):
+                self.assertEqual(window._page, page)
+                window._on_drag_begin(Mock(), 100, 200)
+                window._on_drag_cancel()
+                window._on_drag_begin(Mock(), 100, 200)
+                window._on_drag_update(Mock(), 0, dy)
+                window._on_drag_end(Mock(), 0, dy)
+                window._animate_snap(None, SimpleNamespace(get_frame_time=lambda: 10**30))
+                self.assertEqual(window._offset.get_value(), (1 - page) * 420)
 
     def test_child_claiming_tap_does_not_disable_or_refocus_controls(self):
         window = self.screen()

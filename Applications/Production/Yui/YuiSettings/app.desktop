@@ -4,3 +4,5 @@ Type=Application
 Name=Settings
 Comment=LibitinaOS settings app
 X-Purism-FormFactor=Workstation;Mobile;
+Icon=preferences-system
+StartupWMClass=org.libitina.Yui.Settings

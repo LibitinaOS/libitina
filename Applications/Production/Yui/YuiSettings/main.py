@@ -861,6 +861,7 @@ class SettingsApplication(Gtk.Application):
 
 
 def main() -> int:
+    GLib.set_prgname("org.libitina.Yui.Settings")
     Handy.init()
     return SettingsApplication().run(sys.argv)
 

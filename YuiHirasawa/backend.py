@@ -3,6 +3,7 @@
 import os
 import re
 import select
+import shlex
 import struct
 import subprocess
 import sys
@@ -359,24 +360,60 @@ class ApplicationCatalog:
         key = (app_id, title)
         if key in self._desktop_icon_cache:
             return self._desktop_icon_cache[key]
-        identities = {self._normalize(app_id), self._normalize(title)} - {""}
+        identity = str(app_id or "").removesuffix(".desktop").casefold()
+        normalized_id, normalized_title = self._normalize(app_id), self._normalize(title)
+        fallback = ("theme", app_id) if app_id else ("", "")
+        best_score, result = 0, fallback
         for desktop_file in self._desktop_files():
             try:
-                kf = GLib.KeyFile(); kf.load_from_file(str(desktop_file), GLib.KeyFileFlags.NONE)
-                names = {self._normalize(desktop_file.stem)}
-                for field in ("StartupWMClass", "Name", "Exec"):
-                    try: names.add(self._normalize(kf.get_string("Desktop Entry", field)))
-                    except Exception: pass
-                if not identities.intersection(names - {""}):
-                    continue
-                icon = kf.get_string("Desktop Entry", "Icon")
-                result = ("path", os.path.expanduser(icon)) if icon.startswith(("/", "~")) else ("theme", icon)
-                self._desktop_icon_cache[key] = result
-                return result
-            except Exception:
-                pass
-        self._desktop_icon_cache[key] = ("theme", app_id) if app_id else ("", "")
-        return self._desktop_icon_cache[key]
+                kf = GLib.KeyFile()
+                kf.load_from_file(str(desktop_file), GLib.KeyFileFlags.NONE)
+            except GLib.Error:
+                continue
+
+            def field(name):
+                try:
+                    return kf.get_string("Desktop Entry", name)
+                except GLib.Error:
+                    return ""
+
+            desktop_id = desktop_file.stem.casefold()
+            wmclass, name, command = field("StartupWMClass"), field("Name"), field("Exec")
+            try:
+                arguments = shlex.split(command)
+            except ValueError:
+                arguments = []
+            executable = Path(arguments[0]).name if arguments else ""
+            android = (desktop_id.startswith("waydroid.") or executable == "waydroid"
+                       or "X-WayDroid-App;" in field("Categories"))
+            ids = {desktop_id}
+            if desktop_id.startswith("waydroid."):
+                ids.add(desktop_id[len("waydroid."):])
+            score = 0
+            if identity and identity in ids:
+                score = 100
+            elif identity and identity == wmclass.casefold():
+                score = 90
+            elif normalized_id and normalized_id == self._normalize(executable):
+                score = 80
+            elif normalized_id and normalized_id in {self._normalize(value) for value in (*ids, wmclass)}:
+                score = 70
+            elif not android and normalized_id and normalized_id == self._normalize(name):
+                score = 40
+            elif not android and normalized_title and normalized_title == self._normalize(name):
+                score = 10
+            # Titles such as Settings and Camera are shared by unrelated apps.
+            # In particular, a Waydroid launcher requires an identity match.
+            if score <= best_score:
+                continue
+            icon = field("Icon").strip()
+            best_score = score
+            # Missing metadata must not make a strong match fall through to
+            # an unrelated application that happens to have the same title.
+            result = (("path", os.path.expanduser(icon)) if icon.startswith(("/", "~"))
+                      else ("theme", icon)) if icon else fallback
+        self._desktop_icon_cache[key] = result
+        return result
 
     @staticmethod
     def _normalize(value: Any) -> str:

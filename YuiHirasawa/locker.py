@@ -223,6 +223,7 @@ class LockScreen(Gtk.Window):
         self._pages.get_style_context().add_class("lock-shade")
         overlay.add_overlay(self._pages)
         self.connect("unmap", self._on_unmap)
+        self.connect("map", self._on_map)
 
         cover = Gtk.EventBox()
         cover.set_visible_window(False)
@@ -331,10 +332,17 @@ class LockScreen(Gtk.Window):
             self._snap_source = None
 
     def _on_unmap(self, *_args):
-        self._drag.reset()
         self._drag_active = False
+        self._drag_claimed = False
+        self._drag_moved = False
+        self._drag.reset()
         self._stop_snap()
         self._offset.set_value(self._page * self._page_height)
+
+    def _on_map(self, *_args):
+        # A cancelled touch must not retain ownership after suspend/remap.
+        self._on_unmap()
+        self._finish_page()
 
     def _on_drag_begin(self, _gesture, _x, _y):
         if self._authenticating:
@@ -348,7 +356,7 @@ class LockScreen(Gtk.Window):
         self._drag_start_page = int(self._drag_start / self._page_height + 0.5)
 
     def _on_drag_update(self, gesture, dx, dy):
-        if self._authenticating:
+        if self._authenticating or not self._drag_active:
             return
         self._drag_dy = dy
         if max(abs(dx), abs(dy)) >= 10:
@@ -356,14 +364,14 @@ class LockScreen(Gtk.Window):
         if not self._drag_claimed and abs(dy) >= 10 and abs(dy) > abs(dx):
             self._drag_claimed = True
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-            self._password_page.set_sensitive(False)
-            self.set_focus(None)
-            self._set_keyboard_visible(False)
+            # Keep the original input window and keyboard stable until
+            # release. Disabling the pressed child or hiding its input method
+            # here can cancel this very gesture during the resulting resize.
         if self._drag_claimed:
             self._offset.set_value(max(0, min(self._drag_start - dy, self._page_height)))
 
     def _on_drag_end(self, _gesture, dx, dy):
-        if self._authenticating:
+        if self._authenticating or not self._drag_active:
             return
         if self._drag_claimed:
             target = int(self._offset.get_value() / self._page_height + 0.5)
@@ -385,6 +393,8 @@ class LockScreen(Gtk.Window):
             self._set_page(target)
 
     def _on_drag_cancel(self, *_args):
+        if not self._drag_active:
+            return
         settle = (self._drag_claimed
                   or abs(self._offset.get_value() - self._page * self._page_height) > 0.5)
         self._drag_active = False
@@ -398,8 +408,8 @@ class LockScreen(Gtk.Window):
     def _set_page(self, page, *, animate=True):
         self._page = page
         self._stop_snap()
-        self._password_page.set_sensitive(False)
         if page == 0:
+            self._password_page.set_sensitive(False)
             self._entry.set_text("")
             self._status.set_text("")
             self.set_focus(None)
@@ -440,7 +450,7 @@ class LockScreen(Gtk.Window):
         self._set_page(1)
 
     def _show_clock(self, *_args):
-        if not self._authenticating:
+        if not self._authenticating and not self._drag_active:
             self._set_page(0)
 
     def _on_key_press(self, _window, event):
@@ -458,6 +468,8 @@ class LockScreen(Gtk.Window):
                 return True
         return False
     def _show_keyboard(self, _button: Gtk.Button) -> None:
+        if self._page != 1 or self._drag_active or self._snap_source is not None:
+            return
         self._entry.grab_focus()
         self._set_keyboard_visible(True)
 
@@ -502,7 +514,8 @@ class LockScreen(Gtk.Window):
             bool(entry.get_text()) and not self._authenticating
         )
     def _submit(self, _widget: Gtk.Widget) -> None:
-        if self._authenticating:
+        if (self._authenticating or self._page != 1 or self._drag_active
+                or self._snap_source is not None):
             return
         password = self._entry.get_text()
         if not password:
