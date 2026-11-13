@@ -205,8 +205,8 @@ screen**, using a bundled wallpaper or a custom image. The `lock_wallpaper`
 setting in `~/.config/yui/config.json` accepts `zohran` (default), `shibuya`, or an
 absolute image path, independently of the desktop wallpaper toggle.
 
-While the locker is running, the mobile navigation bar is hidden. The status
-bar stays visible and continues updating, but status-button clicks and pull-down
+While the locker is running, the desktop taskbar and mobile navigation bar are
+hidden. The mobile status bar stays visible and continues updating, but status-button clicks and pull-down
 gestures cannot open the control center. Any open control center closes when
 locking, including in desktop mode. Navigation and control-center access return
 when the locker exits. The shell observes the locker's session-bus name, so a
@@ -216,9 +216,11 @@ Type in the masked Password field and
 press Enter or **Unlock**. Tap **On-screen keyboard** to request squeekboard via
 its session D-Bus interface; the password field remains focused for typing.
 
-To start and supervise squeekboard with the session, set
-`"squeekboard_enabled": true` in `~/.config/yui/config.json` and restart the
-session. This boolean defaults to `false`. Install the `squeekboard` package
+To start and supervise squeekboard with the session, turn on **Settings →
+Advanced → On-screen keyboard → Squeekboard**, then log out and back in.
+Turn the toggle off to disable it for the next session. This controls
+`squeekboard_enabled` in `~/.config/yui/config.json`, which defaults to `false`.
+Install the `squeekboard` package
 first. The compositor must support layer-shell and virtual-keyboard input;
 input-method support enables automatic keyboard display on focused text fields.
 The keyboard uses its own reserved screen area alongside the lock screen.

@@ -118,5 +118,46 @@ class StatusLockTests(unittest.TestCase):
         self.namespace['open_animated_panel'].assert_called_once_with(controls.dialog)
 
 
+class DesktopTaskbarLockTests(unittest.TestCase):
+    def test_desktop_taskbar_hides_and_stays_hidden_across_window_refreshes(self):
+        class Window:
+            def __init__(self, **_kwargs):
+                self.calls = Mock()
+
+            def __getattr__(self, name):
+                return getattr(self.calls, name)
+
+        tree = ast.parse((ROOT / 'desktop.py').read_text())
+        node = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                    and node.name == 'Taskbar')
+        layers = Mock()
+        namespace = dict(Gtk=Mock(Window=Window), GtkLayerShell=layers, GLib=Mock(),
+                         ApplicationCatalog=type('Catalog', (), {}), WindowInfo=object,
+                         WaylandWindowCollector=Mock(), ApplicationLauncher=Mock(),
+                         LauncherControl=Mock(), SystemTray=Mock(), StatusControls=Mock(),
+                         LockStateMonitor=Mock())
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'desktop.py', 'exec'), namespace)
+        bar = namespace['Taskbar']()
+        self.assertTrue(bar._screen_locked)
+        bar.set_no_show_all.assert_called_with(True)
+        namespace['LockStateMonitor'].assert_called_once_with(bar._set_screen_locked)
+        bar._set_screen_locked(False)
+        bar.show_all.assert_called_once()
+        bar.show_all.reset_mock()
+        bar._set_screen_locked(True)
+        bar.hide.assert_called_once()
+        bar._launcher.hide.assert_called_once()
+        bar.set_no_show_all.assert_called_with(True)
+        layers.set_exclusive_zone.assert_called_with(bar, 0)
+        # Window polling used to show the taskbar every 100ms.
+        for _ in range(3):
+            bar._set_groups({})
+        bar.show_all.assert_not_called()
+        bar._set_screen_locked(False)
+        bar.show_all.assert_called_once()
+        bar.set_no_show_all.assert_called_with(False)
+        layers.set_exclusive_zone.assert_called_with(bar, bar.HEIGHT)
+
+
 if __name__ == '__main__':
     unittest.main()

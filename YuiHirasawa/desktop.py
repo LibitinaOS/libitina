@@ -18,6 +18,7 @@ from backend import (
 from control_center import StatusControls
 from power_menu import create_power_menu
 from launcher_control import LauncherControl
+from lock_state import LockStateMonitor
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu, round_window_corners, animate_window_from_edge, close_animated_panel, open_animated_panel
 
@@ -140,6 +141,8 @@ class Taskbar(Gtk.Window, ApplicationCatalog):
 
     def __init__(self):
         super().__init__(title="Taskbar")
+        self._screen_locked = True
+        self.set_no_show_all(True)
         self.get_style_context().add_class("yui-taskbar")
         self._wayland = WaylandWindowCollector()
         self._groups: dict[str, list[WindowInfo]] = {}
@@ -192,6 +195,18 @@ class Taskbar(Gtk.Window, ApplicationCatalog):
         self._update_clock()
         GLib.timeout_add_seconds(1, self._update_clock)
         GLib.timeout_add(100, self._refresh_tick)
+        self._lock_watch = LockStateMonitor(self._set_screen_locked)
+        self.connect("destroy", lambda *_: self._lock_watch.close())
+
+    def _set_screen_locked(self, locked):
+        self._screen_locked = locked
+        self.set_no_show_all(locked)
+        GtkLayerShell.set_exclusive_zone(self, 0 if locked else self.HEIGHT)
+        if locked:
+            self.hide()
+            self._launcher.hide()
+        else:
+            self.show_all()
 
     def _update_clock(self) -> bool:
         now = GLib.DateTime.new_now_local()
@@ -290,7 +305,8 @@ class Taskbar(Gtk.Window, ApplicationCatalog):
         self._groups = groups
         for key, button in self._buttons.items():
             self._update_button(button, groups[key])
-        self.show_all()
+        if not self._screen_locked:
+            self.show_all()
 
     def _update_button(self, button: Gtk.Button, windows: list[WindowInfo]) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)

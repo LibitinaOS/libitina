@@ -404,6 +404,12 @@ class SettingsWindow(Handy.ApplicationWindow):
 
     def _add_advanced_page(self) -> None:
         page = make_page()
+        keyboard_group = group(page, "On-screen keyboard")
+        self._squeekboard_switch = switch_row(
+            keyboard_group, "Squeekboard", load_config().get("squeekboard_enabled", False),
+            subtitle="Start Squeekboard with Yui. Log out and back in to apply. Requires Squeekboard to be installed.",
+        )
+        self._squeekboard_switch.connect("notify::active", self._on_squeekboard_toggled)
         title = Gtk.Label(label="Phosh window-button fix", xalign=0)
         page.pack_start(title, False, False, 0)
         description = Gtk.Label(
@@ -443,6 +449,24 @@ class SettingsWindow(Handy.ApplicationWindow):
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.add(page)
         self._stack.add_titled(scroll, "advanced", "Advanced")
+
+    def _on_squeekboard_toggled(self, switch, _pspec=None) -> None:
+        enabled = switch.get_active()
+        try:
+            config = load_config()
+            config["squeekboard_enabled"] = enabled
+            save_config(config)
+        except (OSError, ValueError) as exc:
+            switch.handler_block_by_func(self._on_squeekboard_toggled)
+            switch.set_active(not enabled)
+            switch.handler_unblock_by_func(self._on_squeekboard_toggled)
+            dialog = Gtk.MessageDialog(
+                transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.CLOSE, text="Could not save the on-screen keyboard setting.",
+            )
+            dialog.format_secondary_text(str(exc))
+            dialog.run()
+            dialog.destroy()
 
     def _add_mobile_layout_controls(self, page: Gtk.Box) -> None:
         page.pack_start(Gtk.Separator(), False, False, 0)
