@@ -1829,7 +1829,7 @@ def profile_display_name():
 @app.route("/api/userfeedconfig", methods=["GET", "POST"])
 def userfeedconfig_api():
     """User-specific feed preferences (dummy MSA) stored in userfeedconfig.json."""
-    DUMMY_EMAIL = "nyancrimew@outlook.com"
+    DUMMY_EMAIL = "nyancrimew@email.example"
     id_re = re.compile(r"^[a-z0-9_-]{1,64}$")
 
     if request.method == "GET":
@@ -1850,7 +1850,7 @@ def userfeedconfig_api():
         }
 
         cfg.setdefault("schema_version", 1)
-        cfg["account"] = {"email": DUMMY_EMAIL, "provider": "Microsoft Account"}
+        cfg["account"] = {"email": DUMMY_EMAIL, "provider": "[!] Account"}
         cfg.setdefault("region_language", "United States (English)")
 
         hs = cfg.get("hidden_sources")
@@ -1915,7 +1915,7 @@ def userfeedconfig_api():
         cfg = {}
     cfg = dict(cfg)
     cfg["schema_version"] = 1
-    cfg["account"] = {"email": DUMMY_EMAIL, "provider": "Microsoft Account"}
+    cfg["account"] = {"email": DUMMY_EMAIL, "provider": "[!] Account"}
     if region_language:
         cfg["region_language"] = region_language.strip()
     cfg["hidden_sources"] = out_hidden
@@ -2030,10 +2030,10 @@ def oobe_complete_api():
             return ("", 400)
 
     # 1) Persist userfeedconfig.json
-    DUMMY_EMAIL = "nyancrimew@outlook.com"
+    DUMMY_EMAIL = "nyancrimew@email.example"
     userfeed_doc: dict = {
         "schema_version": 1,
-        "account": {"email": DUMMY_EMAIL, "provider": "Microsoft Account"},
+        "account": {"email": DUMMY_EMAIL, "provider": "[!] Account"},
         "region_language": region_language,
         "hidden_sources": out_hidden,
         "followed_channels": [],
