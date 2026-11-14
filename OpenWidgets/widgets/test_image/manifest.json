@@ -1,0 +1,7 @@
+{
+  "name": "Test Image",
+  "author": "Widgets",
+  "description": "Displays a local image from /static.",
+  "url": null,
+  "version": "1.0"
+}

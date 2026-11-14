@@ -1,0 +1,39 @@
+Metadata-Version: 2.4
+Name: nws-ez
+Version: 0.1.0
+Summary: EZ wrapper for the NWS weather.gov API
+Author-email: You <you@example.com>
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.31.0
+
+# nws-ez
+
+A tiny, practical wrapper around https://api.weather.gov (NWS weather.gov API).
+
+## Why
+Because the official API is fine, but doing the multi-step “points → grid → forecast/stations” dance every time is annoying.
+
+## Quickstart
+
+```py
+from nws_ez import NWSClient
+
+client = NWSClient(user_agent="my-app/1.0 (me@example.com)")
+
+# Forecast
+fc = client.forecast(38.8977, -77.0365)  # White House coords
+print(fc.periods[0].name, fc.periods[0].temperature, fc.periods[0].short_forecast)
+
+# Hourly
+hourly = client.hourly(38.8977, -77.0365)
+print(hourly.periods[0].start_time, hourly.periods[0].temperature)
+
+# Latest observation near that point
+obs = client.latest_observation(38.8977, -77.0365)
+print(obs.timestamp, obs.temperature_c, obs.wind_speed_mps)
+
+# Active alerts for a point
+alerts = client.alerts_active(point=(38.8977, -77.0365))
+print(len(alerts.features), "active alerts")

@@ -1,0 +1,7 @@
+{
+  "name": "Wikipedia Featured Article",
+  "author": "Widgets",
+  "description": "Shows today's featured Wikipedia article.",
+  "url": "https://en.wikipedia.org/wiki/Wikipedia:Today's_featured_article",
+  "version": "1.0"
+}

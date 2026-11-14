@@ -1,0 +1,7 @@
+{
+  "name": "Weather",
+  "author": "Widgets",
+  "description": "National Weather Service (NWS) weather widget.",
+  "url": "https://weather.gov",
+  "version": "1.0"
+}

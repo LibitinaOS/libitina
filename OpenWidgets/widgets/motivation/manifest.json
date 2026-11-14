@@ -1,0 +1,6 @@
+{
+  "name": "Motivational Quote",
+  "author": "Widgets",
+  "description": "Shows a short motivational quote (deterministic per day).",
+  "version": "1.0"
+}

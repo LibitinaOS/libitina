@@ -1,0 +1,7 @@
+{
+  "name": "Example Widget",
+  "author": "Widgets",
+  "description": "Demonstrates a widget backend endpoint called from the browser.",
+  "url": "https://example.com",
+  "version": "1.0"
+}

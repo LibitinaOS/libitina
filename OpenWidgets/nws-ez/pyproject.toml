@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nws-ez"
+version = "0.1.0"
+description = "EZ wrapper for the NWS weather.gov API"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["requests>=2.31.0"]
+license = { text = "MIT" }
+authors = [{ name = "You", email = "you@example.com" }]
+
+[tool.setuptools]
+packages = ["nws_ez"]

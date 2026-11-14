@@ -1,0 +1,70 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="512"
+  height="512"
+  viewBox="0 0 512 512"
+>
+  <defs>
+    <!-- background -->
+    <linearGradient id="bgBlue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2B7CD3"/>
+      <stop offset="100%" stop-color="#1F5FBF"/>
+    </linearGradient>
+
+    <!-- panels -->
+    <linearGradient id="panelLight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E6F0FF"/>
+    </linearGradient>
+
+    <linearGradient id="panelMid" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#BFE1FF"/>
+      <stop offset="100%" stop-color="#8EC5FF"/>
+    </linearGradient>
+
+    <linearGradient id="panelDark" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7FB4F0"/>
+      <stop offset="100%" stop-color="#5A9BE6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- outer container: 4px @ 48 → ~42.7px -->
+  <rect
+    x="0"
+    y="0"
+    width="512"
+    height="512"
+    rx="42.67"
+    fill="url(#bgBlue)"
+  />
+
+  <!-- left widget: 2px @ 48 → ~21.3px -->
+  <rect
+    x="56"
+    y="56"
+    width="184"
+    height="400"
+    rx="21.33"
+    fill="url(#panelLight)"
+  />
+
+  <!-- right top widget -->
+  <rect
+    x="264"
+    y="56"
+    width="192"
+    height="176"
+    rx="21.33"
+    fill="url(#panelMid)"
+  />
+
+  <!-- right bottom widget -->
+  <rect
+    x="264"
+    y="256"
+    width="192"
+    height="200"
+    rx="21.33"
+    fill="url(#panelDark)"
+  />
+</svg>

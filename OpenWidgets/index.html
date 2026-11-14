@@ -1,0 +1,4300 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            font-family: Segoe UI, sans-serif;
+            overflow: hidden;
+        }
+
+        .panel {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+            background: rgba(20, 20, 20, 0.35);
+        }
+
+        /* Opening animation (webview appears) */
+        .content {
+            transition: opacity 220ms ease, transform 220ms ease;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        body.opening .content {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+
+        #bg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: fill;
+            display: block;
+            filter: blur(75px) saturate(1.25) contrast(1.05);
+            transform: none;
+            opacity: 0.80;
+            pointer-events: none;
+        }
+
+        body.no-effects #bg {
+            filter: none;
+            transform: none;
+            opacity: 1;
+        }
+
+        /* When effects are disabled/unavailable, also disable feed resize transitions. */
+        body.no-effects #widgets-pane,
+        body.no-effects #feed-pane {
+            transition: none;
+        }
+
+        body.no-effects dialog::backdrop {
+            backdrop-filter: none;
+        }
+
+        body.no-effects .offline-card {
+            backdrop-filter: none;
+        }
+
+        .content {
+            position: relative;
+            z-index: 1;
+            padding: 16px;
+            box-sizing: border-box;
+            color: rgba(255, 255, 255, 0.92);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* Legacy Edge/IE */
+        }
+
+        .content::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+        }
+
+        .main-row {
+            flex: 1 1 auto;
+            display: flex;
+            gap: 0;
+            overflow: hidden;
+            min-height: 0; /* allow children to size/scroll correctly in flex layouts */
+        }
+
+        body.feed-expanded .main-row {
+            gap: 12px;
+        }
+
+        .pane {
+            /* In a flex row, avoid forcing height:100% (can cause clipping); allow scrolling. */
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding-bottom: 16px; /* prevent last items from being visually cut off */
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* Legacy Edge/IE */
+        }
+
+        .pane::-webkit-scrollbar { width: 0; height: 0; }
+
+        #widgets-pane {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        /* Feed expand/collapse animation.
+           Keep the feed pane in the DOM so we can transition smoothly while the host window resizes. */
+        #widgets-pane {
+            transition: max-width 220ms ease;
+            max-width: 9999px;
+        }
+
+        body.feed-expanded #widgets-pane {
+            flex: 0 0 auto;
+            max-width: 300px;
+        }
+
+        #feed-pane {
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: 0;
+            opacity: 0;
+            pointer-events: none;
+            overflow: hidden;
+            transform: translateX(8px);
+            transition: max-width 220ms ease, opacity 180ms ease, transform 220ms ease;
+        }
+
+        body.feed-expanded #feed-pane {
+            max-width: 9999px;
+            opacity: 1;
+            pointer-events: auto;
+            overflow: auto;
+            transform: translateX(0);
+        }
+
+        #feed-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, 300px);
+            gap: 12px;
+            justify-content: start;
+            align-items: start;
+        }
+
+        .feed-card {
+            border-radius: 10px;
+            overflow: hidden;
+            background: #202020; /* match widget surface */
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+        }
+
+        /* Feed loading skeleton */
+        .skel {
+            position: relative;
+            overflow: hidden;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.08);
+        }
+
+        .skel::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, rgba(255,255,255,0.00), rgba(255,255,255,0.12), rgba(255,255,255,0.00));
+            transform: translateX(-100%);
+            animation: skelShimmer 1.2s ease-in-out infinite;
+        }
+
+        @keyframes skelShimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .feed-skel-card {
+            border-radius: 10px;
+            overflow: hidden;
+            background: #202020;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+        }
+
+        .feed-skel-media {
+            height: 120px;
+            border-radius: 0;
+        }
+
+        .feed-skel-body {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .feed-skel-line {
+            height: 12px;
+        }
+
+        .feed-skel-line.sm {
+            height: 10px;
+            opacity: 0.9;
+        }
+
+        .feed-card-media {
+            position: relative;
+            width: 100%;
+            height: 120px;
+            background: rgba(255,255,255,0.05);
+        }
+
+        .feed-card-media img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .feed-card-body {
+            padding: 10px;
+        }
+
+        .feed-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            opacity: 0.82;
+        }
+
+        .feed-card-pub {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70%;
+        }
+
+        .feed-card-pub-btn {
+            appearance: none;
+            border: none;
+            background: transparent;
+            padding: 0;
+            margin: 0;
+            color: rgba(255,255,255,0.92);
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70%;
+        }
+
+        .feed-card-pub-btn:hover {
+            text-decoration: underline;
+        }
+
+        .feed-card-time {
+            white-space: nowrap;
+            opacity: 0.78;
+        }
+
+        .feed-card-title {
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1.25;
+            margin: 0;
+        }
+
+        .feed-card-title a {
+            color: rgba(255, 255, 255, 0.92);
+            text-decoration: none;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+        }
+
+        .feed-card-title a:hover {
+            text-decoration: underline;
+        }
+
+        .feed-card-byline {
+            margin-top: 6px;
+            font-size: 11px;
+            opacity: 0.75;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .feed-card-cats {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .feed-card-cat {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: none;
+            background: none;
+            font-size: 11px;
+            opacity: 0.85;
+            max-width: 100%;
+        }
+
+        .feed-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+            top: 0;
+            z-index: 2;
+            padding: 4px 0;
+        }
+
+        .feed-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .avatar-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 999px;
+            padding: 0;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            cursor: pointer;
+        }
+
+        .avatar-btn:hover {
+            border-color: rgba(255,255,255,0.18);
+            background: rgba(255,255,255,0.08);
+        }
+
+        .avatar-img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+        }
+
+        .feed-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 0;
+            opacity: 0.92;
+        }
+
+        .feed-empty {
+            font-size: 12px;
+            opacity: 0.75;
+            margin-bottom: 10px;
+        }
+
+        body.feed-expanded #widget-windows_central {
+            display: none;
+        }
+
+        h1 {
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .header-row h1 {
+            margin: 0;
+        }
+
+        .settings-btn {
+            padding: 6px 10px;
+            border-radius: 10px;
+        }
+
+        dialog {
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 12px;
+            background: #202020;
+            color: rgba(255,255,255,0.92);
+            padding: 12px;
+            box-sizing: border-box;
+            width: min(520px, calc(100vw - 24px));
+            max-width: 520px;
+            max-height: calc(100vh - 24px);
+            overflow-x: hidden;
+            overflow-y: auto;
+            opacity: 0;
+            transform: translateY(8px) scale(0.985);
+            transition: opacity 160ms ease, transform 160ms ease;
+        }
+
+        /*
+           Dialog open animation:
+           `dialog[open]` changes display from none -> block, which can skip transitions.
+           We keep the start state on `[open]`, and only transition to the visible state
+           when JS adds `.shown` on the next frame.
+        */
+        dialog[open] {
+            opacity: 0;
+            transform: translateY(8px) scale(0.985);
+        }
+
+        dialog[open].shown {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        dialog.closing {
+            opacity: 0;
+            transform: translateY(8px) scale(0.985);
+        }
+
+        .source-hero {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .source-logo {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            flex: 0 0 auto;
+        }
+
+        .source-logo img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+        }
+
+        .source-meta {
+            min-width: 0;
+        }
+
+        .source-meta-title {
+            font-weight: 800;
+            opacity: 0.95;
+        }
+
+        .source-meta-sub {
+            font-size: 12px;
+            opacity: 0.78;
+            margin-top: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .source-desc {
+            margin-top: 10px;
+            font-size: 12px;
+            line-height: 1.5;
+            opacity: 0.88;
+        }
+
+        /* Prevent 100%-width inputs/selects from overflowing dialog content box. */
+        #settings-dialog *,
+        #account-dialog *,
+        #oobe-dialog *,
+        #exp-settings-dialog * {
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+
+        /* OOBE */
+        #oobe-dialog {
+            width: min(560px, calc(100vw - 24px));
+            max-width: 560px;
+        }
+
+        .oobe-step {
+            display: none;
+        }
+
+        .oobe-step.active {
+            display: block;
+        }
+
+        .oobe-title {
+            font-size: 16px;
+            font-weight: 800;
+            margin: 0;
+        }
+
+        .oobe-sub {
+            margin-top: 6px;
+            font-size: 12px;
+            opacity: 0.8;
+            line-height: 1.4;
+        }
+
+        .oobe-field {
+            margin-top: 12px;
+        }
+
+        .oobe-label {
+            font-size: 12px;
+            opacity: 0.85;
+            margin-bottom: 6px;
+        }
+
+        .oobe-input,
+        .oobe-select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.92);
+            outline: none;
+        }
+
+        .oobe-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .oobe-row > * {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+
+        .oobe-radio {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            margin-top: 10px;
+        }
+
+        .oobe-radio .small {
+            opacity: 0.8;
+        }
+
+        .oobe-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .oobe-progress {
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+        /* While the OOBE is active, hide the widgets behind it. */
+        body.oobe-active #widgets-pane {
+            display: none;
+        }
+
+        /* Also hide the PixelNews feed behind the OOBE. */
+        body.oobe-active #feed-pane {
+            display: none;
+        }
+
+        body.oobe-active #feed-toggle {
+            display: none !important;
+        }
+
+        body.oobe-active .widget {
+            display: none !important;
+        }
+
+        .exp-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .exp-title-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .exp-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .exp-back {
+            padding: 6px 10px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .exp-back.visible {
+            display: inline-block;
+        }
+
+        .exp-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 60vh;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .exp-list::-webkit-scrollbar { width: 0; height: 0; }
+
+        .exp-item-btn {
+            appearance: none;
+            border: none;
+            width: 100%;
+            text-align: left;
+            cursor: pointer;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+        }
+
+        .exp-item {
+            display: grid;
+            grid-template-columns: 24px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .exp-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.04);
+            font-size: 14px;
+            line-height: 1;
+            opacity: 0.95;
+        }
+
+        .exp-icon-hid {
+            width: 0px;
+            height: 0px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.04);
+            font-size: 14px;
+            line-height: 1;
+            opacity: 0.95;
+        }
+
+        /* Experiments rows don't have icons: collapse the grid's icon column. */
+        .exp-item.no-icon {
+            grid-template-columns: 1fr auto;
+        }
+
+        .exp-meta {
+            min-width: 0;
+        }
+
+        .exp-name {
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .exp-desc {
+            font-size: 11px;
+            opacity: 0.75;
+            margin-top: 2px;
+        }
+
+        .exp-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .exp-chevron {
+            opacity: 0.75;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .exp-sublist {
+            display: none;
+            margin-top: 8px;
+            margin-left: 12px;
+            padding-left: 12px;
+            border-left: 1px solid rgba(255,255,255,0.10);
+            gap: 8px;
+            flex-direction: column;
+        }
+
+        .exp-sublist.visible {
+            display: flex;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+            flex: 0 0 auto;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 999px;
+            transition: 120ms;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            top: 2px;
+            background: rgba(255,255,255,0.88);
+            border-radius: 999px;
+            transition: 120ms;
+        }
+
+        .switch input:checked + .slider {
+            background: rgba(255,255,255,0.18);
+            border-color: rgba(255,255,255,0.20);
+        }
+
+        .switch input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+
+        .exp-note {
+            font-size: 11px;
+            opacity: 0.75;
+            line-height: 1.4;
+        }
+
+        .exp-pre {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            white-space: pre-wrap;
+            font-size: 11px;
+            line-height: 1.4;
+            max-height: 45vh;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .exp-html {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            font-size: 12px;
+            line-height: 1.4;
+            max-height: 45vh;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .exp-html::-webkit-scrollbar { width: 0; height: 0; }
+
+        .exp-html h3 {
+            margin: 10px 0 6px 0;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .exp-html details {
+            margin-top: 8px;
+            padding: 8px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .exp-html summary {
+            cursor: pointer;
+            font-size: 11px;
+            opacity: 0.85;
+        }
+
+        .pn-source-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .pn-source-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            text-align: left;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            cursor: pointer;
+            color: rgba(255,255,255,0.92);
+            appearance: none;
+            -webkit-appearance: none;
+            outline: none;
+        }
+
+        .pn-source-item:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.12);
+        }
+
+        .pn-source-logo {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            flex: 0 0 auto;
+        }
+
+        .pn-source-logo img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+        }
+
+        .pn-source-meta {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+
+        .pn-source-name {
+            font-size: 13px;
+            font-weight: 800;
+            line-height: 1.2;
+            opacity: 0.96;
+        }
+
+        .pn-source-sub {
+            font-size: 11px;
+            opacity: 0.80;
+            margin-top: 3px;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            line-height: 1.35;
+        }
+
+        .pn-source-desc {
+            margin-top: 8px;
+            font-size: 12px;
+            opacity: 0.88;
+            line-height: 1.45;
+        }
+
+        .pn-source-fields {
+            margin: 8px 0 0 0;
+            padding-left: 18px;
+            font-size: 11px;
+            line-height: 1.4;
+            opacity: 0.85;
+        }
+
+        .pn-source-fields li { margin: 4px 0; }
+
+        .pn-source-fields a {
+            color: rgba(255,255,255,0.92);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .pn-chips {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .pn-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.04);
+            font-size: 11px;
+            opacity: 0.90;
+        }
+
+        .pn-lean {
+            margin-top: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .pn-lean-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 11px;
+            opacity: 0.85;
+        }
+
+        .pn-lean-track {
+            position: relative;
+            height: 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: linear-gradient(90deg, rgba(60,120,255,0.90) 0%, rgba(255,255,255,0.12) 50%, rgba(255,70,70,0.90) 100%);
+        }
+
+        .pn-lean-thumb {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 16px;
+            height: 16px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.92);
+            box-shadow: 0 0 0 2px rgba(0,0,0,0.20);
+        }
+
+        .pn-lean-ticks {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            opacity: 0.75;
+        }
+
+        .exp-pre::-webkit-scrollbar { width: 0; height: 0; }
+
+        dialog::backdrop {
+            background: rgba(0,0,0,0.00);
+            transition: background 160ms ease;
+        }
+
+        dialog[open]::backdrop {
+            background: rgba(0,0,0,0.45);
+        }
+
+        dialog.closing::backdrop {
+            background: rgba(0,0,0,0.00);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .content,
+            #widgets-pane,
+            #feed-pane,
+            dialog {
+                transition: none !important;
+            }
+
+            .skel::after {
+                animation: none !important;
+            }
+        }
+
+        body.no-effects .content,
+        body.no-effects #widgets-pane,
+        body.no-effects #feed-pane,
+        body.no-effects dialog {
+            transition: none !important;
+        }
+
+        body.no-effects .skel::after {
+            animation: none !important;
+        }
+
+        .account-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .account-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .account-close {
+            padding: 6px 10px;
+            border-radius: 10px;
+        }
+
+        .account-section-title {
+            font-size: 12px;
+            font-weight: 700;
+            margin: 10px 0 6px 0;
+            opacity: 0.88;
+        }
+
+        .account-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .account-card-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .account-card-meta {
+            min-width: 0;
+        }
+
+        .account-email {
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 320px;
+        }
+
+        .account-provider {
+            font-size: 11px;
+            opacity: 0.75;
+            margin-top: 2px;
+        }
+
+        .account-select {
+            width: 100%;
+            margin-top: 6px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.92);
+            outline: none;
+        }
+
+        .account-tabs {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            margin-bottom: 10px;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .account-tabs::-webkit-scrollbar { width: 0; height: 0; }
+
+        .tab-btn {
+            padding: 6px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.90);
+            cursor: pointer;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+
+        .tab-btn.active {
+            border-color: rgba(255,255,255,0.18);
+            background: rgba(255,255,255,0.08);
+        }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        .account-sources {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 50vh;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .account-sources::-webkit-scrollbar { width: 0; height: 0; }
+
+        .source-item {
+            display: grid;
+            grid-template-columns: 24px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 8px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .source-name {
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .source-sub {
+            font-size: 11px;
+            opacity: 0.70;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .settings-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 60vh;
+            overflow: auto;
+            scrollbar-width: none;
+        }
+
+        .settings-list::-webkit-scrollbar { width: 0; height: 0; }
+
+        .settings-item {
+            display: grid;
+            grid-template-columns: 24px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 8px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .settings-meta {
+            min-width: 0;
+        }
+
+        .settings-name {
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .settings-desc {
+            font-size: 11px;
+            opacity: 0.75;
+            margin-top: 2px;
+        }
+
+        .settings-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .settings-actions .btn {
+            padding: 6px 8px;
+            border-radius: 10px;
+        }
+
+        .widget {
+            margin-bottom: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            background: #202020; /* TODO: fix light mode */
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            width: 300px;
+            min-width: 300px;
+            max-width: 300px;
+            box-sizing: border-box;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .widget h2 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            font-weight: 600;
+            opacity: 0.95;
+        }
+
+        .articles {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .article {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .thumb {
+            width: 72px;
+            height: 54px;
+            border-radius: 6px;
+            object-fit: cover;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            flex: 0 0 auto;
+        }
+
+        .meta {
+            min-width: 0;
+        }
+
+        .title {
+            font-size: 13px;
+            line-height: 1.25;
+            margin-bottom: 4px;
+        }
+
+        .title a {
+            color: rgba(255, 255, 255, 0.92);
+            text-decoration: none;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+        }
+
+        .title a:hover {
+            text-decoration: underline;
+        }
+
+        .byline {
+            font-size: 11px;
+            opacity: 0.75;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .cats {
+            font-size: 11px;
+            opacity: 0.70;
+            margin-top: 2px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .cat {
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(0, 0, 0, 0.12);
+        }
+
+        .small {
+            font-size: 11px;
+            opacity: 0.70;
+        }
+
+        .error {
+            font-size: 11px;
+            opacity: 0.75;
+            color: rgba(255, 200, 200, 0.90);
+        }
+
+        .weather-lines {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .weather-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .weather-icon {
+            width: 44px;
+            height: 44px;
+            flex: 0 0 auto;
+            opacity: 0.92;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        .weather-temp {
+            font-size: 34px;
+            line-height: 1.0;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            margin-top: 2px;
+        }
+
+        .hourly-strip {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 2px;
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* Legacy Edge/IE */
+        }
+
+        .hourly-strip::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+        }
+
+        .hour-card {
+            width: 50px;
+            flex: 0 0 auto;
+            border-radius: 10px;
+            padding: 8px 8px;
+            box-sizing: border-box;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .hour-label {
+            font-size: 11px;
+            font-weight: 600;
+            opacity: 0.92;
+            white-space: nowrap;
+        }
+
+        .hour-icon {
+            width: 22px;
+            height: 22px;
+            opacity: 0.92;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        .hour-temp {
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.0;
+            opacity: 0.95;
+        }
+
+        .hour-pop {
+            font-size: 11px;
+            opacity: 0.78;
+            line-height: 1.0;
+        }
+
+        .btn-row {
+            margin-top: 10px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .btn {
+            appearance: none;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(255, 255, 255, 0.92);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        /* Offline overlay (hide all UI except background). */
+        #offline-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 3;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            box-sizing: border-box;
+        }
+
+        body.offline #offline-overlay {
+            display: flex;
+        }
+
+        body.offline .content {
+            display: none;
+        }
+
+        .offline-card {
+            width: 100%;
+            max-width: 520px;
+            border-radius: 12px;
+            padding: 18px;
+            box-sizing: border-box;
+            background: rgba(20, 20, 20, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            backdrop-filter: blur(10px);
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        .offline-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+        }
+
+        .offline-sub {
+            font-size: 12px;
+            opacity: 0.85;
+            margin: 0 0 14px 0;
+            line-height: 1.4;
+        }
+
+        .offline-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .exp-select {
+            width: 170px;
+            padding: 8px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.92);
+            outline: none;
+        }
+        
+        /* unvisited link */
+        a:link {
+        color: white;
+        }
+
+        /* visited link */
+        a:visited {
+        color: white;
+        }
+
+        /* mouse over link */
+        a:hover {
+        color: white;
+        }
+
+        /* selected link */
+        a:active {
+        color: white;
+        }
+
+        {{ widgets_css|safe }}
+    </style>
+</head>
+<body class="opening" data-win11="{{ '1' if is_win11 else '0' }}">
+    <div class="panel">
+        <img id="bg" alt="" src="/bg.png?t=0" />
+
+        <div id="offline-overlay" aria-live="polite">
+            <div class="offline-card">
+                <div class="offline-title">We’re having trouble loading your widgets</div>
+                    <div class="offline-sub">
+                    You might be offline or there could be something wrong with your internet connection.
+                    </div>
+                <div class="offline-actions">
+                    <button class="btn" id="offline-try" type="button">Try again</button>
+                    <button class="btn" id="offline-check" type="button">Check connection</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="header-row">
+                <div style="color: white; display: flex; flex-direction: column; gap: 2px; opacity: 1;">
+                    <div class="small" id="dashboard-date"></div>
+                    <h1 id="dashboard-title">Windows Dashboard</h1>
+                </div>
+                <div style="display:flex; gap: 8px;">
+                    <button class="btn" id="feed-toggle" type="button">Feed</button>
+                    <button class="btn" id="exp-settings-open" type="button">ExpSetting</button>
+                </div>
+            </div>
+
+            <div class="main-row">
+                <div class="pane" id="widgets-pane">
+                    {{ widgets_html|safe }}
+                </div>
+
+                <div class="pane" id="feed-pane">
+                    <div class="feed-header">
+                        <div class="feed-title">Feed</div>
+                        <div class="feed-actions">
+                            <button class="btn" id="feed-refresh" type="button">Refresh</button>
+                            <button class="avatar-btn" id="account-btn" type="button" title="Account">
+                                <img class="avatar-img" id="account-avatar" alt="" src="/api/profile/picture.png?t=0" />
+                            </button>
+                        </div>
+                    </div>
+                    <div class="feed-empty" id="feed-status">Loading…</div>
+                    <div id="feed-grid"></div>
+                </div>
+            </div>
+
+            <dialog id="settings-dialog">
+                <div class="settings-title">Widgets</div>
+                <div class="small" id="settings-status">Loading…</div>
+                <div class="settings-list" id="settings-list"></div>
+                <div class="btn-row" style="margin-top: 12px; justify-content: flex-end; gap: 8px;">
+                    <button class="btn" id="settings-close" type="button">Close</button>
+                    <button class="btn" id="settings-save" type="button">Save</button>
+                </div>
+            </dialog>
+
+            <dialog id="exp-settings-dialog">
+                <div class="exp-title-row">
+                    <div class="exp-title-left">
+                        <button class="btn exp-back" id="exp-back" type="button">←</button>
+                        <div class="exp-title" id="exp-title">Settings</div>
+                    </div>
+                    <button class="btn" id="exp-close" type="button">×</button>
+                </div>
+
+                <div class="small" id="exp-status" style="margin-bottom: 10px; opacity: 0.75;"></div>
+
+                <!-- Root view -->
+                <div id="exp-view-root" data-view="root">
+                    <button class="exp-item-btn" id="exp-discover" type="button">
+                        <div class="exp-item">
+                            <div class="exp-icon">+</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Discover new widgets</div>
+                                <div class="exp-desc">Add more widgets to your board</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron">↗</div></div>
+                        </div>
+                    </button>
+
+                    <button class="exp-item-btn" id="exp-manage" type="button" style="margin-top: 10px;">
+                        <div class="exp-item">
+                            <div class="exp-icon">▦</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Manage widgets</div>
+                                <div class="exp-desc">Add, rearrange, and remove widgets</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron">›</div></div>
+                        </div>
+                    </button>
+
+                    <button class="exp-item-btn" id="exp-personalize" type="button" style="margin-top: 10px;">
+                        <div class="exp-item">
+                            <div class="exp-icon">✎</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Personalize</div>
+                                <div class="exp-desc">Feed personalization and account</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron" id="exp-personalize-chevron">⌄</div></div>
+                        </div>
+                    </button>
+
+                    <div class="exp-sublist" id="exp-personalize-sub">
+                        <button class="exp-item-btn" id="exp-personalize-feed" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">📰</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Feed</div>
+                                    <div class="exp-desc">Open PixelNews personalization</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">↗</div></div>
+                            </div>
+                        </button>
+                    </div>
+
+                    <button class="exp-item-btn" id="exp-shell" type="button" style="margin-top: 10px;">
+                        <div class="exp-item">
+                            <div class="exp-icon">⌘</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Shell integration</div>
+                                <div class="exp-desc">Win+W, gestures, taskbar options</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron">›</div></div>
+                        </div>
+                    </button>
+
+                    <button class="exp-item-btn" id="exp-advanced" type="button" style="margin-top: 10px;">
+                        <div class="exp-item">
+                            <div class="exp-icon">⚙</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Advanced settings</div>
+                                <div class="exp-desc">Visual effects, experiments, and reset options</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron">›</div></div>
+                        </div>
+                    </button>
+
+                    <button class="exp-item-btn" id="exp-about" type="button" style="margin-top: 10px;">
+                        <div class="exp-item">
+                            <div class="exp-icon">i</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">About</div>
+                                <div class="exp-desc">Version and legal information</div>
+                            </div>
+                            <div class="exp-right"><div class="exp-chevron">›</div></div>
+                        </div>
+                    </button>
+                </div>
+
+                <!-- Manage widgets view -->
+                <div id="exp-view-manage" data-view="manage" style="display:none;">
+                    <div class="exp-note" style="margin-bottom: 10px;">
+                        Widget management currently uses the existing Widgets settings.
+                    </div>
+                    <div class="exp-list">
+                        <button class="exp-item-btn" id="exp-manage-add" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">+</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Add widgets</div>
+                                    <div class="exp-desc">(Coming soon)</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                        <button class="exp-item-btn" id="exp-manage-rearrange" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">⇅</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Rearrange widgets</div>
+                                    <div class="exp-desc">Open the current widget settings</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">↗</div></div>
+                            </div>
+                        </button>
+                        <button class="exp-item-btn" id="exp-manage-remove" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">−</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Remove widgets</div>
+                                    <div class="exp-desc">Open the current widget settings</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">↗</div></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Shell integration view -->
+                <div id="exp-view-shell" data-view="shell" style="display:none;">
+                    <div class="exp-note" style="margin-bottom: 10px;">
+                        These features are currently being worked on. They are saved, but do nothing right now.
+                    </div>
+                    <div class="exp-note" id="exp-win11-warning" style="display:none; margin-bottom: 10px;">
+                        On Windows 11: turn off Widgets in Windows Settings before enabling any of these options.
+                        <button class="btn" id="exp-open-taskbar" type="button" style="margin-left: 6px;">Open taskbar settings</button>
+                    </div>
+
+                    <div class="exp-list">
+                        <div class="exp-item">
+                            <div class="exp-icon">W</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Override Win+W</div>
+                                <div class="exp-desc">Use OpenWidgets instead of Windows Widgets</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="sh-override-winw" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <div class="exp-item">
+                            <div class="exp-icon">☝</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Touch screen gesture</div>
+                                <div class="exp-desc">Swipe from the left to open</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="sh-touch-gesture" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <div class="account-section-title" style="margin-top: 4px;">Taskbar button options</div>
+
+                        <div class="exp-item">
+                            <div class="exp-icon">◻</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Taskbar button overlay</div>
+                                <div class="exp-desc">Show an overlay on the taskbar button</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="sh-taskbar-overlay" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <div class="exp-item">
+                            <div class="exp-icon">▣</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Dynamic taskbar button</div>
+                                <div class="exp-desc">Static icon vs dynamic cycling info</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="sh-taskbar-dynamic" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <div class="exp-item">
+                            <div class="exp-icon">⌁</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Open on hover</div>
+                                <div class="exp-desc">Open the board when hovering the taskbar button</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="sh-open-hover" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <div class="account-section-title" style="margin-top: 4px;">Dynamic content cycle</div>
+
+                        <div class="exp-item" style="align-items:flex-start;">
+                            <div class="exp-icon">⛅</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Weather</div>
+                                <div class="exp-desc">
+                                    <label><input id="sh-cycle-weather-current" type="checkbox" /> Current conditions</label><br />
+                                    <label><input id="sh-cycle-weather-precip" type="checkbox" /> Next precip</label>
+                                </div>
+                            </div>
+                            <div class="exp-right"></div>
+                        </div>
+
+                        <div class="exp-item" style="align-items:flex-start;">
+                            <div class="exp-icon">📰</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">News</div>
+                                <div class="exp-desc">
+                                    <label><input id="sh-cycle-news-top" type="checkbox" /> Top story from PixelNews</label><br />
+                                    <label><input id="sh-cycle-news-random" type="checkbox" /> Random story</label>
+                                </div>
+                            </div>
+                            <div class="exp-right"></div>
+                        </div>
+
+                        <div class="exp-item" style="align-items:flex-start;">
+                            <div class="exp-icon">🎂</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Famous birthdays</div>
+                                <div class="exp-desc">
+                                    <label><input id="sh-cycle-bday-science" type="checkbox" /> Science</label><br />
+                                    <label><input id="sh-cycle-bday-history" type="checkbox" /> History</label><br />
+                                    <label><input id="sh-cycle-bday-arts" type="checkbox" /> Arts</label><br />
+                                    <label><input id="sh-cycle-bday-cs" type="checkbox" /> Computer science</label><br />
+                                    <label><input id="sh-cycle-bday-hackers" type="checkbox" /> Hackers</label><br />
+                                    <label><input id="sh-cycle-bday-journalists" type="checkbox" /> Journalists</label>
+                                </div>
+                            </div>
+                            <div class="exp-right"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced settings view -->
+                <div id="exp-view-advanced" data-view="advanced" style="display:none;">
+                    <div class="exp-note" style="margin-bottom: 10px;">
+                        Advanced settings are for troubleshooting and power users.
+                    </div>
+
+                    <div class="exp-list">
+                        <div class="exp-item">
+                            <div class="exp-icon">✨</div>
+                            <div class="exp-meta">
+                                <div class="exp-name">Disable visual effects</div>
+                                <div class="exp-desc">Use a fallback background and remove blur/backdrop effects (future: also disables animations).</div>
+                            </div>
+                            <div class="exp-right">
+                                <label class="switch"><input id="adv-disable-effects" type="checkbox" /><span class="slider"></span></label>
+                            </div>
+                        </div>
+
+                        <button class="exp-item-btn" id="adv-delete-userfeed" type="button" style="margin-top: 10px;">
+                            <div class="exp-item">
+                                <div class="exp-icon">🗑</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Delete your user feed config</div>
+                                    <div class="exp-desc">Resets PixelNews personalization stored in userfeedconfig.json (confirmation required).</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+
+                        <button class="exp-item-btn" id="adv-open-experiments" type="button" style="margin-top: 10px;">
+                            <div class="exp-item">
+                                <div class="exp-icon">🧪</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Experiments</div>
+                                    <div class="exp-desc">Experimental feature flags</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Experiments view -->
+                <div id="exp-view-experiments" data-view="experiments" style="display:none;">
+                    <div class="error" style="margin-bottom: 10px;">
+                        Warning: Experimental features ahead! By enabling these features, you could lose data or compromise your security or privacy. If you are an enterprise admin you should not be using these flags in production.
+                    </div>
+
+                    <input id="exp-flag-search" placeholder="Search flags" style="width: 100%; padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.92); outline: none; margin-bottom: 10px;" />
+
+                    <div class="exp-list" id="exp-flags-list">
+                        <div class="small">Loading…</div>
+                    </div>
+                </div>
+
+                <!-- About view -->
+                <div id="exp-view-about" data-view="about" style="display:none;">
+                    <div class="exp-list">
+                        <button class="exp-item-btn" id="exp-about-version" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">v</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Version</div>
+                                    <div class="exp-desc">OpenWidgets, Python, and installed widgets</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                        <button class="exp-item-btn" id="exp-about-legal" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">⚖</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Legal</div>
+                                    <div class="exp-desc">Open source and compliance notes</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="exp-view-about-version" data-view="about-version" style="display:none;">
+                    <div class="exp-note">Version information (best-effort).</div>
+                    <div class="exp-pre" id="exp-version-pre">Loading…</div>
+                </div>
+
+                <div id="exp-view-about-legal" data-view="about-legal" style="display:none;">
+                    <div class="exp-list">
+                        <button class="exp-item-btn" id="exp-legal-oss" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">{ }</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Open source licenses</div>
+                                    <div class="exp-desc">(Coming soon)</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                        <button class="exp-item-btn" id="exp-legal-pixelnews" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">📰</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">PixelNews</div>
+                                    <div class="exp-desc">Transparency and legal</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="exp-view-legal-pixelnews" data-view="legal-pixelnews" style="display:none;">
+                    <div class="exp-list">
+                        <button class="exp-item-btn" id="exp-pn-transparency" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">i</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Transparency</div>
+                                    <div class="exp-desc">Sources, algorithm notes, and weather data</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                        <button class="exp-item-btn" id="exp-pn-legal" type="button">
+                            <div class="exp-item">
+                                <div class="exp-icon">⚖</div>
+                                <div class="exp-meta">
+                                    <div class="exp-name">Legal</div>
+                                    <div class="exp-desc">(Coming soon)</div>
+                                </div>
+                                <div class="exp-right"><div class="exp-chevron">›</div></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="exp-view-pn-transparency" data-view="pn-transparency" style="display:none;">
+                    <div class="exp-note">
+                        PixelNews uses feed sources and a lightweight ranking algorithm. Weather data comes from the National Weather Service (NWS).
+                    </div>
+                    <div class="exp-html" id="exp-pn-html">Loading…</div>
+                </div>
+            </dialog>
+
+            <dialog id="account-dialog">
+                <div class="account-title-row">
+                    <div class="account-title">Personalize PixelNews</div>
+                    <button class="btn account-close" id="account-close" type="button">×</button>
+                </div>
+
+                <div class="account-section-title">Account used by this feed</div>
+                <div class="account-card">
+                    <div class="account-card-left">
+                        <div style="width: 36px; height: 36px; border-radius: 999px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06);">
+                            <img class="avatar-img" id="account-avatar-large" alt="" src="/api/profile/picture.png?t=0" />
+                        </div>
+                        <div class="account-card-meta">
+                            <div class="account-email" id="account-email">nyancrimew@outlook.com</div>
+                            <div class="account-provider">Microsoft Account</div>
+                        </div>
+                    </div>
+                    <button class="btn" id="account-signout" type="button">Sign Out</button>
+                </div>
+
+                <div class="account-section-title">Region &amp; language</div>
+                <select class="account-select" id="account-region">
+                    <option>United States (English)</option>
+                    <option>United Kingdom (English)</option>
+                    <option>Canada (English)</option>
+                    <option>Germany (English)</option>
+                    <option>Germany (Deutsch)</option>
+                    <option>Switzerland (English)</option>
+                    <option>Switzerland (Deutsch)</option>
+                </select>
+
+                <div class="account-tabs" role="tablist" aria-label="Personalize PixelNews tabs">
+                    <button class="tab-btn active" type="button" data-tab="discover">Discover</button>
+                    <button class="tab-btn" type="button" data-tab="following">Following</button>
+                    <button class="tab-btn" type="button" data-tab="blocked">Blocked</button>
+                    <button class="tab-btn" type="button" data-tab="notifications">Notifications</button>
+                    <button class="tab-btn" type="button" data-tab="settings">Settings</button>
+                </div>
+
+                <div class="tab-panel active" data-panel="discover">
+                    <div class="small">Find channels to follow for a personalized feed.</div>
+                    <div style="margin-top: 10px;">
+                        <input id="account-search" placeholder="Search for channels to follow" style="width: 100%; padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.92); outline: none;" />
+                    </div>
+                    <div class="small" style="margin-top: 10px; opacity: 0.75;">Recommended topics</div>
+                    <div class="small" id="account-channels-status" style="margin-top: 8px;">Loading…</div>
+                    <div class="account-sources" id="account-channels" style="margin-top: 8px;"></div>
+                </div>
+
+                <div class="tab-panel" data-panel="following">
+                    <div class="small">Following is not implemented (dummy).</div>
+                </div>
+
+                <div class="tab-panel" data-panel="blocked">
+                    <div class="small">Blocked is not implemented (dummy).</div>
+                </div>
+
+                <div class="tab-panel" data-panel="notifications">
+                    <div class="small">Notifications is not implemented (dummy).</div>
+                </div>
+
+                <div class="tab-panel" data-panel="settings">
+                    <div class="small">Hide sources to customize your feed. These settings are stored in userfeedconfig.json.</div>
+                    <div class="small" id="account-sources-status" style="margin-top: 8px;">Loading…</div>
+                    <div class="account-sources" id="account-sources" style="margin-top: 8px;"></div>
+                </div>
+
+                <div class="btn-row" style="margin-top: 12px; justify-content: flex-end; gap: 8px;">
+                    <button class="btn" id="account-done" type="button">Done</button>
+                </div>
+            </dialog>
+
+            <dialog id="source-dialog">
+                <div class="account-title-row">
+                    <div class="account-title">Source</div>
+                    <button class="btn account-close" id="source-close" type="button">×</button>
+                </div>
+
+                <div class="source-hero">
+                    <div class="source-logo"><img id="source-logo" alt="" src="" /></div>
+                    <div class="source-meta">
+                        <div class="source-meta-title" id="source-name">—</div>
+                        <div class="source-meta-sub" id="source-tagline"></div>
+                        <div class="source-meta-sub" id="source-owner"></div>
+                    </div>
+                </div>
+
+                <div class="source-desc" id="source-desc"></div>
+
+                <div class="account-section-title">Political lean</div>
+                <div class="small" id="source-lean-value" style="opacity: 0.85;">Lean score: —</div>
+                <div class="pn-lean" style="margin-top: 8px;">
+                    <div class="pn-lean-track" id="source-lean-track" aria-hidden="true">
+                        <div class="pn-lean-thumb" id="source-lean-thumb" style="left: 50%;"></div>
+                    </div>
+                    <div class="pn-lean-ticks"><div>Hard Left</div><div>Center</div><div>Hard Right</div></div>
+                </div>
+
+                <div class="account-section-title">Details</div>
+                <div class="small" id="source-details" style="opacity: 0.85;"></div>
+
+                <div class="btn-row" style="margin-top: 12px; justify-content: flex-end; gap: 8px;">
+                    <button class="btn" id="source-hide" type="button">Hide</button>
+                    <button class="btn" id="source-open" type="button">Open website</button>
+                </div>
+            </dialog>
+
+            <dialog id="oobe-dialog">
+                <div class="account-title-row">
+                    <div class="account-title">Welcome</div>
+                    <button class="btn account-close" id="oobe-close" type="button" disabled title="Finish setup to continue">×</button>
+                </div>
+
+                <div class="oobe-step active" data-oobe-step="welcome">
+                    <h2 class="oobe-title">Welcome to OpenWidgets!</h2>
+                    <div class="oobe-sub">Let’s do a quick setup so PixelNews and weather work correctly. This takes about a minute.</div>
+                </div>
+
+                <div class="oobe-step" data-oobe-step="region">
+                    <h2 class="oobe-title">News region &amp; language</h2>
+                    <div class="oobe-sub">Choose the region and language used to pick default news sources.</div>
+                    <div class="oobe-field">
+                        <div class="oobe-label">Region &amp; language</div>
+                        <select class="oobe-select" id="oobe-region">
+                            <option>United States (English)</option>
+                            <option>United Kingdom (English)</option>
+                            <option>Canada (English)</option>
+                            <option>Germany (English)</option>
+                            <option>Germany (Deutsch)</option>
+                            <option>Switzerland (English)</option>
+                            <option>Switzerland (Deutsch)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="oobe-step" data-oobe-step="sources">
+                    <h2 class="oobe-title">Pick your sources</h2>
+                    <div class="oobe-sub">Select which sources you want in your feed. You can change this later in Settings → Personalize PixelNews.</div>
+                    <div class="small" id="oobe-sources-status" style="margin-top:10px; opacity:0.8;">Loading…</div>
+                    <div class="account-sources" id="oobe-sources" style="margin-top: 8px;"></div>
+                </div>
+
+                <div class="oobe-step" data-oobe-step="location">
+                    <h2 class="oobe-title">Weather location</h2>
+                    <div class="oobe-sub">Weather uses NWS (US-only). You can let it guess your location from your IP, or enter coordinates manually.</div>
+
+                    <label class="oobe-radio">
+                        <input type="radio" name="oobe-loc" id="oobe-loc-ip" checked />
+                        <div style="min-width:0;">
+                            <div style="font-weight:700;">Guess from IP (recommended)</div>
+                            <div class="small" id="oobe-ip-status">We’ll try to detect your city/country.</div>
+                        </div>
+                    </label>
+
+                    <label class="oobe-radio">
+                        <input type="radio" name="oobe-loc" id="oobe-loc-manual" />
+                        <div style="min-width:0;">
+                            <div style="font-weight:700;">Enter coordinates</div>
+                            <div class="small">Tip: latitude/longitude from Google Maps works well.</div>
+                        </div>
+                    </label>
+
+                    <div id="oobe-manual-wrap" style="margin-top:10px; display:none;">
+                        <div class="oobe-row">
+                            <div class="oobe-field">
+                                <div class="oobe-label">Latitude</div>
+                                <input class="oobe-input" id="oobe-lat" placeholder="e.g. 38.8977" />
+                            </div>
+                            <div class="oobe-field">
+                                <div class="oobe-label">Longitude</div>
+                                <input class="oobe-input" id="oobe-lon" placeholder="e.g. -77.0365" />
+                            </div>
+                        </div>
+                        <div class="oobe-row">
+                            <div class="oobe-field">
+                                <div class="oobe-label">City name (optional)</div>
+                                <input class="oobe-input" id="oobe-city" placeholder="e.g. Washington" />
+                            </div>
+                            <div class="oobe-field">
+                                <div class="oobe-label">Country code (optional)</div>
+                                <input class="oobe-input" id="oobe-cc" placeholder="e.g. US" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="oobe-step" data-oobe-step="units">
+                    <h2 class="oobe-title">Units</h2>
+                    <div class="oobe-sub">Choose how temperatures are displayed.</div>
+                    <div class="oobe-field">
+                        <div class="oobe-label">Temperature unit</div>
+                        <select class="oobe-select" id="oobe-units">
+                            <option value="F">Fahrenheit (°F)</option>
+                            <option value="C">Celsius (°C)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="oobe-step" data-oobe-step="done">
+                    <h2 class="oobe-title">You’re set!</h2>
+                    <div class="oobe-sub">Click OK to save your preferences and refresh OpenWidgets.</div>
+                    <div class="small" id="oobe-done-status" style="margin-top:10px; opacity:0.85;"></div>
+                </div>
+
+                <div class="oobe-footer">
+                    <div class="oobe-progress" id="oobe-progress">Step 1 of 6</div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn" id="oobe-back" type="button">Back</button>
+                        <button class="btn" id="oobe-next" type="button">Next</button>
+                    </div>
+                </div>
+            </dialog>
+
+    </div>
+
+    <script>
+        // Kick the opening animation on the first frame.
+        try {
+            requestAnimationFrame(() => {
+                if (document && document.body) document.body.classList.remove('opening');
+            });
+        } catch (e) {
+            try { if (document && document.body) document.body.classList.remove('opening'); } catch (e2) {}
+        }
+
+        // Minimal helper API for widget scripts.
+        async function openExternal(url) {
+            try {
+                await fetch('/open?url=' + encodeURIComponent(url), { method: 'POST' });
+            } catch (e) {
+                // Best-effort
+            }
+        }
+
+        const _prefersReducedMotion = (() => {
+            try {
+                return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+            } catch (e) {
+                return false;
+            }
+        })();
+
+        function openDialogAnimated(dlg) {
+            if (!dlg) return;
+            try { dlg.classList.remove('closing'); } catch (e) {}
+            // Reset to the start state so opening transitions are consistent.
+            try { dlg.classList.remove('shown'); } catch (e) {}
+            try {
+                if (dlg.showModal) dlg.showModal();
+                else dlg.setAttribute('open', '');
+            } catch (e) {
+                // Best-effort
+            }
+
+            if (_prefersReducedMotion || (document.body && document.body.classList.contains('no-effects'))) {
+                try { dlg.classList.add('shown'); } catch (e) {}
+                return;
+            }
+
+            // Ensure the browser commits the initial (hidden) style before transitioning.
+            try {
+                // Force a reflow, then toggle on the next frame.
+                void dlg.offsetHeight;
+                requestAnimationFrame(() => {
+                    try { dlg.classList.add('shown'); } catch (e) {}
+                });
+            } catch (e) {
+                try { dlg.classList.add('shown'); } catch (e2) {}
+            }
+        }
+
+        function closeDialogAnimated(dlg, { immediate } = { immediate: false }) {
+            if (!dlg) return;
+            const doClose = () => {
+                try {
+                    if (dlg.close) dlg.close();
+                    else dlg.removeAttribute('open');
+                } catch (e) {}
+                try { dlg.classList.remove('closing'); } catch (e) {}
+                try { dlg.classList.remove('shown'); } catch (e) {}
+            };
+
+            if (immediate || _prefersReducedMotion || (document.body && document.body.classList.contains('no-effects'))) {
+                doClose();
+                return;
+            }
+
+            try {
+                if (!dlg.open) return;
+                dlg.classList.add('closing');
+            } catch (e) {
+                doClose();
+                return;
+            }
+
+            setTimeout(doClose, 170);
+        }
+
+        function bindDialogAnimationGuards(dlg) {
+            if (!dlg) return;
+            try {
+                dlg.addEventListener('cancel', (e) => {
+                    e.preventDefault();
+                    closeDialogAnimated(dlg);
+                });
+            } catch (e) {}
+        }
+
+        window.WidgetHost = {
+            el: (slug) => document.getElementById('widget-' + String(slug || '')),
+            body: (slug) => document.getElementById('widget-' + String(slug || '') + '-body'),
+            setHTML: (slug, html) => {
+                const b = document.getElementById('widget-' + String(slug || '') + '-body');
+                if (b) b.innerHTML = String(html == null ? '' : html);
+            },
+            appendHTML: (slug, html) => {
+                const b = document.getElementById('widget-' + String(slug || '') + '-body');
+                if (b) b.insertAdjacentHTML('beforeend', String(html == null ? '' : html));
+            },
+            openExternal: openExternal,
+        };
+
+        // Offline detection
+        const offlineTryBtn = document.getElementById('offline-try');
+        const offlineCheckBtn = document.getElementById('offline-check');
+        let _offline = false;
+
+        function setOfflineMode(isOffline) {
+            const wasOffline = _offline;
+            _offline = !!isOffline;
+            document.body.classList.toggle('offline', _offline);
+
+            // Only force-close dialogs when we *enter* offline mode.
+            if (_offline && !wasOffline) {
+                try {
+                    const dlg = document.getElementById('settings-dialog');
+                    if (dlg && dlg.open) {
+                        closeDialogAnimated(dlg, { immediate: true });
+                    }
+                } catch (e) {}
+
+                try {
+                    const dlg2 = document.getElementById('account-dialog');
+                    if (dlg2 && dlg2.open) {
+                        closeDialogAnimated(dlg2, { immediate: true });
+                    }
+                } catch (e) {}
+            }
+        }
+
+        async function checkInternet({ force } = { force: false }) {
+            try {
+                const resp = await fetch('/api/internet/status?force=' + (force ? '1' : '0') + '&t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                const online = !!(data && data.online);
+                setOfflineMode(!online);
+                return online;
+            } catch (e) {
+                // If we can't even talk to our local server, treat as offline.
+                setOfflineMode(true);
+                return false;
+            }
+        }
+
+        if (offlineTryBtn) {
+            offlineTryBtn.addEventListener('click', async () => {
+                const online = await checkInternet({ force: true });
+                if (online) location.reload();
+            });
+        }
+
+        if (offlineCheckBtn) {
+            offlineCheckBtn.addEventListener('click', async () => {
+                try {
+                    await fetch('/open-network-settings?t=' + Date.now(), { method: 'POST' });
+                } catch (e) {}
+            });
+        }
+
+        // Feed pane
+        const feedToggleBtn = document.getElementById('feed-toggle');
+        const feedPane = document.getElementById('feed-pane');
+        const feedGrid = document.getElementById('feed-grid');
+        const feedStatus = document.getElementById('feed-status');
+        const feedRefreshBtn = document.getElementById('feed-refresh');
+
+        function _renderFeedSkeleton(count) {
+            const n = Math.max(1, Math.min(30, Number(count) || 8));
+            const parts = [];
+            for (let i = 0; i < n; i++) {
+                parts.push(
+                    `<div class="feed-skel-card">` +
+                    `<div class="skel feed-skel-media"></div>` +
+                    `<div class="feed-skel-body">` +
+                    `<div class="skel feed-skel-line" style="width: 70%;"></div>` +
+                    `<div class="skel feed-skel-line" style="width: 92%;"></div>` +
+                    `<div class="skel feed-skel-line sm" style="width: 55%;"></div>` +
+                    `</div>` +
+                    `</div>`
+                );
+            }
+            return parts.join('');
+        }
+
+        function _renderFeedSkeletonAppend(count) {
+            const n = Math.max(1, Math.min(12, Number(count) || 3));
+            const parts = [];
+            for (let i = 0; i < n; i++) {
+                parts.push(
+                    `<div class="feed-skel-card feed-skel-append">` +
+                    `<div class="skel feed-skel-media"></div>` +
+                    `<div class="feed-skel-body">` +
+                    `<div class="skel feed-skel-line" style="width: 70%;"></div>` +
+                    `<div class="skel feed-skel-line" style="width: 92%;"></div>` +
+                    `<div class="skel feed-skel-line sm" style="width: 55%;"></div>` +
+                    `</div>` +
+                    `</div>`
+                );
+            }
+            return parts.join('');
+        }
+
+        function showFeedSkeleton({ mode } = { mode: 'reset' }) {
+            if (!feedGrid || !feedStatus) return;
+            try { feedGrid.setAttribute('aria-busy', 'true'); } catch (e) {}
+            if (mode === 'append') {
+                // Append a few placeholders at the bottom.
+                try { feedGrid.insertAdjacentHTML('beforeend', _renderFeedSkeletonAppend(3)); } catch (e) {}
+                return;
+            }
+            feedStatus.style.display = 'none';
+            feedGrid.innerHTML = _renderFeedSkeleton(8);
+        }
+
+        function hideFeedSkeleton({ mode } = { mode: 'reset' }) {
+            if (!feedGrid || !feedStatus) return;
+            try { feedGrid.removeAttribute('aria-busy'); } catch (e) {}
+            if (mode === 'append') {
+                try {
+                    feedGrid.querySelectorAll('.feed-skel-append').forEach(el => el.remove());
+                } catch (e) {}
+                return;
+            }
+            feedStatus.style.display = '';
+        }
+
+        // Account dialog (PixelNews)
+        const accountBtn = document.getElementById('account-btn');
+        const accountAvatar = document.getElementById('account-avatar');
+        const accountDialog = document.getElementById('account-dialog');
+        const accountCloseBtn = document.getElementById('account-close');
+        const accountDoneBtn = document.getElementById('account-done');
+        const accountSignOutBtn = document.getElementById('account-signout');
+        const accountRegion = document.getElementById('account-region');
+        const accountSources = document.getElementById('account-sources');
+        const accountSourcesStatus = document.getElementById('account-sources-status');
+        const accountAvatarLarge = document.getElementById('account-avatar-large');
+        const accountSearch = document.getElementById('account-search');
+        const accountChannels = document.getElementById('account-channels');
+        const accountChannelsStatus = document.getElementById('account-channels-status');
+
+        // Source dialog
+               const sourceDialog = document.getElementById('source-dialog');
+        const sourceCloseBtn = document.getElementById('source-close');
+        const sourceLogoImg = document.getElementById('source-logo');
+        const sourceNameEl = document.getElementById('source-name');
+        const sourceTaglineEl = document.getElementById('source-tagline');
+        const sourceOwnerEl = document.getElementById('source-owner');
+        const sourceDescEl = document.getElementById('source-desc');
+        const sourceDetailsEl = document.getElementById('source-details');
+        const sourceLeanValueEl = document.getElementById('source-lean-value');
+        const sourceLeanTrackEl = document.getElementById('source-lean-track');
+        const sourceLeanThumbEl = document.getElementById('source-lean-thumb');
+        const sourceHideBtn = document.getElementById('source-hide');
+        const sourceOpenBtn = document.getElementById('source-open');
+        let _sourceDialogId = null;
+
+        bindDialogAnimationGuards(accountDialog);
+        bindDialogAnimationGuards(sourceDialog);
+
+        // DDLC easter egg: typing certain names in channel search.
+        let _monikaMode = false;
+        function _shouldTriggerMonika(q) {
+            const s = String(q || '').trim().toLowerCase();
+            return s === 'sayori' || s === 'natsuki' || s === 'yuri';
+        }
+
+        function _activateMonikaMode() {
+            if (_monikaMode) return;
+            _monikaMode = true;
+
+            // Use a native alert so the message isn't affected by DOM edits.
+            try { window.alert('Always Monika.'); } catch (e) {}
+
+            const phrase = 'Monika is the only one';
+            try { document.title = phrase; } catch (e) {}
+
+            // Replace visible text nodes across the page.
+            try {
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            if (!node || !node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                            const p = node.parentElement;
+                            if (!p) return NodeFilter.FILTER_REJECT;
+                            const tag = String(p.tagName || '').toLowerCase();
+                            if (tag === 'script' || tag === 'style' || tag === 'noscript') return NodeFilter.FILTER_REJECT;
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+                let n;
+                while ((n = walker.nextNode())) {
+                    n.nodeValue = phrase;
+                }
+            } catch (e) {}
+
+            // Also update input placeholders (not text nodes).
+            try {
+                document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
+                    try { el.setAttribute('placeholder', phrase); } catch (e) {}
+                });
+            } catch (e) {}
+        }
+
+        let _feedExpanded = false;
+        let _feedLastPayload = null;
+        const FEED_PAGE_SIZE = 15;
+        let _feedOffset = 0;
+        let _feedHasMore = true;
+        let _feedLoading = false;
+
+        function esc(s) {
+            return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        function emitUserFeedConfigChanged() {
+            try {
+                window.dispatchEvent(new CustomEvent('userfeedconfig-changed'));
+            } catch (e) {
+                // Best-effort
+            }
+        }
+
+        function _formatLean(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '0.50';
+            return Math.max(0, Math.min(1, n)).toFixed(2);
+        }
+
+        function _leanText(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return 'Center';
+            if (n < 0.45) return 'Left-leaning';
+            if (n > 0.55) return 'Right-leaning';
+            return 'Center';
+        }
+
+        async function _getSourcesListBestEffort() {
+            const fromCache = _feedLastPayload && Array.isArray(_feedLastPayload.sources) ? _feedLastPayload.sources : null;
+            if (fromCache && fromCache.length) return fromCache;
+            try {
+                const resp = await fetch('/widgets/windows_central/stories.json?limit=1&offset=0&t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                return Array.isArray(data && data.sources) ? data.sources : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        async function openSourceInfo(sourceId) {
+            const sid = String(sourceId || '').trim().toLowerCase();
+            if (!sid || !sourceDialog) return;
+
+            const sources = await _getSourcesListBestEffort();
+            const src = sources.find(s => s && String(s.id || '').trim().toLowerCase() === sid) || null;
+
+            _sourceDialogId = sid;
+
+            const name = src && src.name ? String(src.name) : sid;
+            const tagline = src && src.tagline ? String(src.tagline) : '';
+            const url = src && src.url ? String(src.url) : '';
+            const ownership = src && src.ownership_category ? String(src.ownership_category) : 'unknown / unclear ownership';
+            const ownerName = (src && typeof src.owner_name === 'string') ? String(src.owner_name) : '';
+            const ownerUrl = (src && typeof src.owner_url === 'string') ? String(src.owner_url) : '';
+            const lean = _formatLean(src && src.political_lean);
+            const logoPath = src && src.logo_path ? String(src.logo_path) : '';
+            const desc = src && src.description ? String(src.description) : '';
+
+            if (sourceNameEl) sourceNameEl.textContent = name;
+            if (sourceTaglineEl) sourceTaglineEl.textContent = tagline;
+            if (sourceOwnerEl) {
+                sourceOwnerEl.textContent = '';
+                if (ownerName) {
+                    const prefix = document.createElement('span');
+                    prefix.textContent = 'Owner: ';
+                    sourceOwnerEl.appendChild(prefix);
+
+                    if (ownerUrl) {
+                        const a = document.createElement('a');
+                        a.href = '#';
+                        a.textContent = ownerName;
+                        a.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            if (window.WidgetHost && window.WidgetHost.openExternal) window.WidgetHost.openExternal(ownerUrl);
+                        });
+                        sourceOwnerEl.appendChild(a);
+                    } else {
+                        const t = document.createElement('span');
+                        t.textContent = ownerName;
+                        sourceOwnerEl.appendChild(t);
+                    }
+                }
+            }
+            if (sourceDescEl) sourceDescEl.textContent = desc;
+            if (sourceDetailsEl) {
+                const parts = [];
+                parts.push('Ownership: ' + ownership);
+                parts.push('Political lean: ' + lean + ' (0=left, 1=right)');
+                if (url) parts.push('Feed: ' + url);
+                sourceDetailsEl.textContent = parts.join(' • ');
+            }
+
+            // Lean slider
+            try {
+                const leanNum = Number(lean);
+                const clamped = isFinite(leanNum) ? Math.max(0, Math.min(1, leanNum)) : 0.5;
+                if (sourceLeanThumbEl) sourceLeanThumbEl.style.left = (clamped * 100).toFixed(1) + '%';
+                if (sourceLeanValueEl) sourceLeanValueEl.textContent = 'Lean score: ' + _formatLean(clamped) + ' (' + _leanText(clamped) + ')';
+                if (sourceLeanTrackEl) sourceLeanTrackEl.setAttribute('aria-label', 'Political lean ' + _formatLean(clamped));
+            } catch (e) {}
+
+            if (sourceLogoImg) {
+                sourceLogoImg.src = logoPath || '';
+                sourceLogoImg.style.opacity = logoPath ? '1' : '0';
+            }
+
+            // Hide/unhide button state
+            const cfg = await loadUserFeedConfig();
+            const hidden = new Set(Array.isArray(cfg.hidden_sources) ? cfg.hidden_sources.map(String).map(s => s.toLowerCase()) : []);
+            const isHidden = hidden.has(sid);
+            if (sourceHideBtn) sourceHideBtn.textContent = isHidden ? 'Show' : 'Hide';
+            if (sourceOpenBtn) sourceOpenBtn.disabled = !url;
+
+            openDialogAnimated(sourceDialog);
+        }
+
+        window.openSourceInfo = openSourceInfo;
+
+        function formatRelativeTime(tsSeconds) {
+            const ts = Number(tsSeconds);
+            if (!isFinite(ts) || ts <= 0) return '';
+            const now = Date.now() / 1000;
+            const diff = Math.max(0, now - ts);
+            const mins = Math.floor(diff / 60);
+            if (mins < 60) return mins <= 1 ? '1m' : `${mins}m`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs <= 1 ? '1h' : `${hrs}h`;
+            const days = Math.floor(hrs / 24);
+            return days <= 1 ? '1d' : `${days}d`;
+        }
+
+        async function setFeedExpanded(expanded) {
+            _feedExpanded = !!expanded;
+            document.body.classList.add('feed-resizing');
+            document.body.classList.toggle('feed-expanded', _feedExpanded);
+            setTimeout(() => {
+                try { document.body.classList.remove('feed-resizing'); } catch (e) {}
+            }, 260);
+            try {
+                await fetch('/ui/feed?expanded=' + (_feedExpanded ? '1' : '0'), { method: 'POST' });
+            } catch (e) {
+                // best-effort
+            }
+            try { refreshGreeting(); } catch (e) {}
+            if (_feedExpanded) refreshFeed();
+        }
+
+        // Restore feed expanded/collapsed state from config.json (best-effort).
+        (async function restoreFeedExpandedState() {
+            try {
+                const resp = await fetch('/api/ui/state?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                if (data && typeof data.feed_expanded === 'boolean') {
+                    await setFeedExpanded(!!data.feed_expanded);
+                }
+            } catch (e) {
+                // best-effort
+            }
+        })();
+
+        function renderFeed(payload, { append } = { append: false }) {
+            if (!feedGrid || !feedStatus) return;
+            if (!append) feedGrid.innerHTML = '';
+
+            const stories = payload && Array.isArray(payload.stories) ? payload.stories : [];
+            if (!append) {
+                if (!stories.length) {
+                    feedStatus.textContent = (payload && payload.error) ? payload.error : 'No stories available.';
+                    return;
+                }
+                feedStatus.textContent = '';
+            } else {
+                // If appending and this page is empty, just stop.
+                if (!stories.length) return;
+            }
+            for (const s of stories) {
+                const pub = s.publication ? String(s.publication) : '';
+                const sid = s.source_id ? String(s.source_id) : '';
+                const author = s.author ? String(s.author) : '';
+                const byline = author ? `By ${author}` : '';
+                const timeRel = formatRelativeTime(s.published_at);
+                const cats = Array.isArray(s.categories) ? s.categories.slice(0, 4) : [];
+                const catsHtml = cats.length ? `<div class="feed-card-cats">${cats.map(c => `<span class="feed-card-cat">${esc(c)}</span>`).join('')}</div>` : '';
+                const media = s.thumb_url
+                    ? `<div class="feed-card-media"><img src="${esc(s.thumb_url)}" alt="" /></div>`
+                    : `<div class="feed-card-media"></div>`;
+
+                const el = document.createElement('div');
+                el.className = 'feed-card';
+                el.setAttribute('data-url', String(s.link || ''));
+                el.innerHTML = `
+                    ${media}
+                    <div class="feed-card-body">
+                        <div class="feed-card-top">
+                            ${sid ? `<button class="feed-card-pub-btn" type="button" data-source-id="${esc(sid)}" title="About ${esc(pub || 'News')}">${esc(pub || 'News')}</button>` : `<div class="feed-card-pub">${esc(pub || 'News')}</div>`}
+                            <div class="feed-card-time">${esc(timeRel)}</div>
+                        </div>
+                        <div class="feed-card-title"><a href="#" data-url="${esc(s.link)}" title="${esc(s.title || 'Untitled')}">${esc(s.title || 'Untitled')}</a></div>
+                        ${byline ? `<div class="feed-card-byline">${esc(byline)}</div>` : ''}
+                        ${catsHtml}
+                    </div>
+                `;
+                feedGrid.appendChild(el);
+            }
+        }
+
+        async function loadFeedPage({ reset, force } = { reset: false, force: false }) {
+            if (!feedStatus || _feedLoading) return;
+            if (!reset && !_feedHasMore) return;
+
+            if (reset) {
+                _feedOffset = 0;
+                _feedHasMore = true;
+                feedStatus.textContent = 'Loading…';
+                showFeedSkeleton({ mode: 'reset' });
+            }
+
+            if (!reset) {
+                showFeedSkeleton({ mode: 'append' });
+            }
+
+            _feedLoading = true;
+            try {
+                const forceParam = force ? '&force=1' : '';
+                const url = `/widgets/windows_central/stories.json?limit=${FEED_PAGE_SIZE}&offset=${_feedOffset}${forceParam}&t=${Date.now()}`;
+                const resp = await fetch(url, { cache: 'no-store' });
+                const data = await resp.json();
+                _feedLastPayload = data;
+
+                const hasMore = !!(data && data.has_more);
+                const nextOffset = (data && typeof data.next_offset === 'number') ? data.next_offset : (_feedOffset + FEED_PAGE_SIZE);
+                const pageStories = (data && Array.isArray(data.stories)) ? data.stories : [];
+
+                renderFeed(data, { append: !reset });
+
+                _feedOffset = nextOffset;
+                _feedHasMore = hasMore && pageStories.length > 0;
+
+                if (reset && pageStories.length) feedStatus.textContent = '';
+                if (reset && !pageStories.length) {
+                    feedStatus.textContent = (data && data.error) ? data.error : 'No stories available.';
+                }
+            } catch (e) {
+                if (reset) renderFeed({ stories: [], error: 'Failed to load feed.' }, { append: false });
+            } finally {
+                _feedLoading = false;
+                hideFeedSkeleton({ mode: reset ? 'reset' : 'append' });
+            }
+        }
+
+        async function refreshFeed({ force } = { force: false }) {
+            await loadFeedPage({ reset: true, force: !!force });
+        }
+
+        if (feedToggleBtn) {
+            feedToggleBtn.addEventListener('click', () => setFeedExpanded(!_feedExpanded));
+        }
+        if (feedRefreshBtn) {
+            feedRefreshBtn.addEventListener('click', () => refreshFeed({ force: true }));
+        }
+        if (feedPane) {
+            feedPane.addEventListener('scroll', () => {
+                if (!_feedExpanded) return;
+                if (_feedLoading || !_feedHasMore) return;
+
+                // Load next page when near bottom.
+                const threshold = 80;
+                const remaining = feedPane.scrollHeight - feedPane.scrollTop - feedPane.clientHeight;
+                if (remaining <= threshold) {
+                    loadFeedPage({ reset: false });
+                }
+            });
+        }
+        if (feedPane) {
+            feedPane.addEventListener('click', (e) => {
+                const srcBtn = e.target && e.target.closest ? e.target.closest('[data-source-id]') : null;
+                if (srcBtn) {
+                    e.preventDefault();
+                    const sid = srcBtn.getAttribute('data-source-id') || '';
+                    if (sid) openSourceInfo(sid);
+                    return;
+                }
+
+                const a = e.target && e.target.closest ? e.target.closest('a[data-url]') : null;
+                if (a) {
+                    e.preventDefault();
+                    const url = a.getAttribute('data-url') || '';
+                    if (url && window.WidgetHost && window.WidgetHost.openExternal) window.WidgetHost.openExternal(url);
+                    return;
+                }
+
+                const card = e.target && e.target.closest ? e.target.closest('[data-url]') : null;
+                if (!card) return;
+                const url = card.getAttribute('data-url') || '';
+                if (url && window.WidgetHost && window.WidgetHost.openExternal) window.WidgetHost.openExternal(url);
+            });
+        }
+
+        if (sourceCloseBtn && sourceDialog) sourceCloseBtn.addEventListener('click', () => {
+            closeDialogAnimated(sourceDialog);
+        });
+
+        if (sourceOpenBtn) sourceOpenBtn.addEventListener('click', async () => {
+            const sid = String(_sourceDialogId || '').trim().toLowerCase();
+            if (!sid) return;
+            const sources = await _getSourcesListBestEffort();
+            const src = sources.find(s => s && String(s.id || '').trim().toLowerCase() === sid) || null;
+            const url = src && src.url ? String(src.url) : '';
+            if (url && window.WidgetHost && window.WidgetHost.openExternal) window.WidgetHost.openExternal(url);
+        });
+
+        if (sourceHideBtn) sourceHideBtn.addEventListener('click', async () => {
+            const sid = String(_sourceDialogId || '').trim().toLowerCase();
+            if (!sid) return;
+
+            const cfg = await loadUserFeedConfig();
+            const hidden = new Set(Array.isArray(cfg.hidden_sources) ? cfg.hidden_sources.map(String).map(s => s.toLowerCase()) : []);
+            const isHidden = hidden.has(sid);
+            if (isHidden) hidden.delete(sid);
+            else hidden.add(sid);
+
+            const nextCfg = Object.assign({}, cfg);
+            nextCfg.hidden_sources = Array.from(hidden.values());
+            if (accountRegion && accountRegion.value) nextCfg.region_language = String(accountRegion.value);
+
+            const ok = await saveUserFeedConfig(nextCfg);
+            if (ok) {
+                sourceHideBtn.textContent = isHidden ? 'Hide' : 'Show';
+                emitUserFeedConfigChanged();
+                if (_feedExpanded) refreshFeed();
+            }
+        });
+
+        // PixelNews account dialog
+        let _userFeedConfig = null;
+
+        function refreshAvatar() {
+            const url = '/api/profile/picture.png?t=' + Date.now();
+            if (accountAvatar) accountAvatar.src = url;
+            if (accountAvatarLarge) accountAvatarLarge.src = url;
+        }
+
+        function selectAccountTab(tabName) {
+            const tabs = document.querySelectorAll('#account-dialog .tab-btn');
+            const panels = document.querySelectorAll('#account-dialog .tab-panel');
+            tabs.forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === tabName));
+            panels.forEach(p => p.classList.toggle('active', p.getAttribute('data-panel') === tabName));
+        }
+
+        async function loadUserFeedConfig() {
+            try {
+                const resp = await fetch('/api/userfeedconfig?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                _userFeedConfig = (data && typeof data === 'object') ? data : {};
+                return _userFeedConfig;
+            } catch (e) {
+                _userFeedConfig = {};
+                return _userFeedConfig;
+            }
+        }
+
+        async function saveUserFeedConfig(nextCfg) {
+            try {
+                await fetch('/api/userfeedconfig', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(nextCfg || {}),
+                });
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function loadFeedSourcesAndRender() {
+            if (!accountSources || !accountSourcesStatus) return;
+            accountSources.innerHTML = '';
+            accountSourcesStatus.textContent = 'Loading…';
+
+            const cfg = await loadUserFeedConfig();
+            const hidden = new Set(Array.isArray(cfg.hidden_sources) ? cfg.hidden_sources.map(String) : []);
+
+            let sources = [];
+            try {
+                const resp = await fetch('/widgets/windows_central/stories.json?limit=1&offset=0&t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                sources = Array.isArray(data && data.sources) ? data.sources : [];
+            } catch (e) {
+                sources = [];
+            }
+
+            if (!sources.length) {
+                accountSourcesStatus.textContent = 'No sources found.';
+                return;
+            }
+
+            accountSourcesStatus.textContent = '';
+
+            for (const s of sources) {
+                const sid = s && s.id ? String(s.id) : '';
+                const name = s && s.name ? String(s.name) : sid;
+                const url = s && s.url ? String(s.url) : '';
+                const tagline = s && s.tagline ? String(s.tagline) : '';
+                if (!sid) continue;
+
+                const row = document.createElement('div');
+                row.className = 'source-item';
+
+                const cbWrap = document.createElement('div');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = !hidden.has(sid);
+                cbWrap.appendChild(cb);
+
+                const meta = document.createElement('div');
+                meta.style.minWidth = '0';
+                meta.innerHTML = `<div class="source-name">${esc(name)}</div>`
+                    + (tagline ? `<div class="source-sub">${esc(tagline)}</div>` : '')
+                    + (url ? `<div class="source-sub">${esc(url)}</div>` : '');
+
+                const state = document.createElement('div');
+                state.className = 'small';
+                state.style.opacity = '0.75';
+                state.textContent = cb.checked ? 'Shown' : 'Hidden';
+
+                cb.addEventListener('change', async () => {
+                    state.textContent = cb.checked ? 'Shown' : 'Hidden';
+                    if (!cb.checked) hidden.add(sid);
+                    else hidden.delete(sid);
+
+                    const nextCfg = Object.assign({}, cfg);
+                    nextCfg.hidden_sources = Array.from(hidden.values());
+                    if (accountRegion && accountRegion.value) nextCfg.region_language = String(accountRegion.value);
+
+                    accountSourcesStatus.textContent = 'Saving…';
+                    const ok = await saveUserFeedConfig(nextCfg);
+                    accountSourcesStatus.textContent = ok ? 'Saved.' : 'Failed to save.';
+
+                    if (ok) emitUserFeedConfigChanged();
+
+                    if (_feedExpanded) refreshFeed();
+                });
+
+                row.appendChild(cbWrap);
+                row.appendChild(meta);
+                row.appendChild(state);
+                accountSources.appendChild(row);
+            }
+        }
+
+        async function loadChannelsAndRender({ filter } = { filter: '' }) {
+            if (!accountChannels || !accountChannelsStatus) return;
+            accountChannels.innerHTML = '';
+            accountChannelsStatus.textContent = 'Loading…';
+
+            const cfg = await loadUserFeedConfig();
+            const followed = new Set(Array.isArray(cfg.followed_channels) ? cfg.followed_channels.map(String) : []);
+
+            let channels = [];
+            try {
+                const resp = await fetch('/widgets/windows_central/stories.json?limit=1&offset=0&t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                channels = Array.isArray(data && data.channels) ? data.channels : [];
+            } catch (e) {
+                channels = [];
+            }
+
+            const q = String(filter || '').trim().toLowerCase();
+            if (q) {
+                channels = channels.filter(c => {
+                    const name = c && c.name ? String(c.name) : '';
+                    const id = c && c.id ? String(c.id) : '';
+                    return name.toLowerCase().includes(q) || id.toLowerCase().includes(q);
+                });
+            }
+
+            if (!channels.length) {
+                accountChannelsStatus.textContent = q ? 'No matching channels.' : 'No channels found.';
+                return;
+            }
+            accountChannelsStatus.textContent = '';
+
+            for (const c of channels) {
+                const cid = c && c.id ? String(c.id) : '';
+                const name = c && c.name ? String(c.name) : cid;
+                if (!cid) continue;
+
+                const row = document.createElement('div');
+                row.className = 'source-item';
+
+                const cbWrap = document.createElement('div');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = followed.has(cid);
+                cbWrap.appendChild(cb);
+
+                const meta = document.createElement('div');
+                meta.style.minWidth = '0';
+                meta.innerHTML = `<div class="source-name">${esc(name)}</div><div class="source-sub">${esc(cid)}</div>`;
+
+                const state = document.createElement('div');
+                state.className = 'small';
+                state.style.opacity = '0.75';
+                state.textContent = cb.checked ? 'Following' : 'Not following';
+
+                cb.addEventListener('change', async () => {
+                    state.textContent = cb.checked ? 'Following' : 'Not following';
+                    if (cb.checked) followed.add(cid);
+                    else followed.delete(cid);
+
+                    const nextCfg = Object.assign({}, cfg);
+                    nextCfg.followed_channels = Array.from(followed.values());
+                    if (accountRegion && accountRegion.value) nextCfg.region_language = String(accountRegion.value);
+
+                    accountChannelsStatus.textContent = 'Saving…';
+                    const ok = await saveUserFeedConfig(nextCfg);
+                    accountChannelsStatus.textContent = ok ? 'Saved.' : 'Failed to save.';
+
+                    if (ok) emitUserFeedConfigChanged();
+
+                    if (_feedExpanded) refreshFeed();
+                });
+
+                row.appendChild(cbWrap);
+                row.appendChild(meta);
+                row.appendChild(state);
+                accountChannels.appendChild(row);
+            }
+        }
+
+        if (accountDialog) {
+            const tabBtns = accountDialog.querySelectorAll('.tab-btn');
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tab = btn.getAttribute('data-tab') || 'discover';
+                    selectAccountTab(tab);
+                    if (tab === 'settings') loadFeedSourcesAndRender();
+                    if (tab === 'discover') loadChannelsAndRender({ filter: accountSearch ? accountSearch.value : '' });
+                });
+            });
+        }
+
+        if (accountBtn && accountDialog) {
+            accountBtn.addEventListener('click', async () => {
+                if (_offline) return;
+                refreshAvatar();
+                openDialogAnimated(accountDialog);
+
+                const cfg = await loadUserFeedConfig();
+                if (accountRegion && typeof cfg.region_language === 'string' && cfg.region_language) {
+                    const desired = String(cfg.region_language);
+                    for (const opt of Array.from(accountRegion.options || [])) {
+                        if (String(opt.value) === desired || String(opt.text) === desired) {
+                            accountRegion.value = opt.value;
+                            break;
+                        }
+                    }
+                }
+
+                selectAccountTab('discover');
+                loadChannelsAndRender({ filter: accountSearch ? accountSearch.value : '' });
+            });
+        }
+
+        if (accountSearch) {
+            accountSearch.addEventListener('input', () => {
+                if (_shouldTriggerMonika(accountSearch.value)) {
+                    _activateMonikaMode();
+                    return;
+                }
+                loadChannelsAndRender({ filter: accountSearch.value });
+            });
+        }
+
+        if (accountCloseBtn && accountDialog) accountCloseBtn.addEventListener('click', () => {
+            closeDialogAnimated(accountDialog);
+        });
+        if (accountDoneBtn && accountDialog) accountDoneBtn.addEventListener('click', () => {
+            closeDialogAnimated(accountDialog);
+        });
+
+        if (accountRegion) {
+            accountRegion.addEventListener('change', async () => {
+                const cfg = await loadUserFeedConfig();
+                const nextCfg = Object.assign({}, cfg);
+                nextCfg.region_language = String(accountRegion.value || '');
+                await saveUserFeedConfig(nextCfg);
+                emitUserFeedConfigChanged();
+            });
+        }
+
+        window.addEventListener('userfeedconfig-changed', () => {
+            if (_feedExpanded) refreshFeed();
+        });
+
+        if (accountSignOutBtn) accountSignOutBtn.addEventListener('click', async () => {
+            // Dummy sign-out.
+            try {
+                accountSignOutBtn.disabled = true;
+                accountSignOutBtn.textContent = 'Signed out';
+                setTimeout(() => {
+                    accountSignOutBtn.disabled = false;
+                    accountSignOutBtn.textContent = 'Sign Out';
+                }, 800);
+            } catch (e) {}
+        });
+
+        // Dynamic header greeting + small-chance easter egg.
+        const dashboardTitle = document.getElementById('dashboard-title');
+        const dashboardDate = document.getElementById('dashboard-date');
+
+        let _greetingProfileCache = null;
+        let _greetingProfileCacheAt = 0;
+
+        async function _loadGreetingProfileBestEffort() {
+            const now = Date.now();
+            // Cache for a bit to avoid constant lookups.
+            if (_greetingProfileCache && (now - _greetingProfileCacheAt) < (5 * 60 * 1000)) {
+                return _greetingProfileCache;
+            }
+            try {
+                const resp = await fetch('/api/profile/display-name?t=' + now, { cache: 'no-store' });
+                const data = await resp.json();
+                _greetingProfileCache = (data && typeof data === 'object') ? data : {};
+                _greetingProfileCacheAt = now;
+                return _greetingProfileCache;
+            } catch (e) {
+                _greetingProfileCache = {};
+                _greetingProfileCacheAt = now;
+                return _greetingProfileCache;
+            }
+        }
+
+        function computeGreeting(now, displayName) {
+            const hour = now.getHours();
+            let base = 'Good evening';
+            if (hour >= 5 && hour < 12) base = 'Good morning';
+            else if (hour >= 12 && hour < 18) base = 'Good afternoon';
+
+            const name = String(displayName || '').trim();
+            if (name) return `${base}, ${name}!`;
+            return base + '!';
+        }
+
+        function computeDateLine(now) {
+            try {
+                return new Intl.DateTimeFormat(undefined, { month: 'long', day: 'numeric' }).format(now);
+            } catch (e) {
+                const months = [
+                    'January','February','March','April','May','June',
+                    'July','August','September','October','November','December'
+                ];
+                return months[now.getMonth()] + ' ' + now.getDate();
+            }
+        }
+
+        async function refreshGreeting() {
+            const now = new Date();
+            if (dashboardDate) dashboardDate.textContent = computeDateLine(now);
+
+            if (!dashboardTitle) return;
+            // Small chance to show the easter egg instead.
+            if (Math.random() < 0.05) {
+                dashboardTitle.textContent = 'I <3 dedf1sh';
+                return;
+            }
+
+            // Only show a name when the feed is expanded, and only if enabled server-side.
+            let displayName = '';
+            if (_feedExpanded) {
+                const profile = await _loadGreetingProfileBestEffort();
+                const enabled = !!(profile && profile.enabled);
+                const dn = profile && typeof profile.display_name === 'string' ? profile.display_name : '';
+                displayName = enabled ? String(dn || '').trim() : '';
+            }
+
+            dashboardTitle.textContent = computeGreeting(now, displayName);
+        }
+
+        refreshGreeting();
+        // Recompute periodically in case the time-of-day changes while open.
+        setInterval(refreshGreeting, 60 * 1000);
+        window.addEventListener('focus', refreshGreeting);
+
+        // Refresh the background periodically (cache-bust) to approximate acrylic.
+        const img = document.getElementById('bg');
+        let _bgInterval = null;
+        function refreshBg() {
+            img.src = '/bg.png?t=' + Date.now();
+        }
+        _bgInterval = setInterval(refreshBg, 1000);
+        window.addEventListener('focus', refreshBg);
+        refreshBg();
+
+        // Check connectivity at startup and periodically.
+        checkInternet({ force: false });
+        setInterval(() => { checkInternet({ force: false }); }, 6000);
+
+        // Settings dialog
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsDialog = document.getElementById('settings-dialog');
+        const settingsList = document.getElementById('settings-list');
+        const settingsStatus = document.getElementById('settings-status');
+        const settingsClose = document.getElementById('settings-close');
+        const settingsSave = document.getElementById('settings-save');
+
+        let _settingsState = null;
+
+        bindDialogAnimationGuards(settingsDialog);
+
+        function renderSettingsList() {
+            if (!settingsList || !_settingsState) return;
+            settingsList.innerHTML = '';
+
+            const widgets = Array.isArray(_settingsState.widgets) ? _settingsState.widgets.slice() : [];
+            const order = Array.isArray(_settingsState.order) ? _settingsState.order.slice() : [];
+            const byId = new Map(widgets.map(w => [String(w.id), w]));
+
+            const ordered = [];
+            for (const id of order) {
+                if (byId.has(String(id))) ordered.push(byId.get(String(id)));
+            }
+            for (const w of widgets) {
+                if (!order.includes(String(w.id))) ordered.push(w);
+            }
+
+            _settingsState.order = ordered.map(w => String(w.id));
+
+            for (let i = 0; i < ordered.length; i++) {
+                const w = ordered[i];
+                const row = document.createElement('div');
+                row.className = 'settings-item';
+
+                const cbWrap = document.createElement('div');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = !!w.enabled;
+                cb.addEventListener('change', () => { w.enabled = cb.checked; });
+                cbWrap.appendChild(cb);
+
+                const meta = document.createElement('div');
+                meta.className = 'settings-meta';
+                const name = document.createElement('div');
+                name.className = 'settings-name';
+                name.textContent = w.name || w.id;
+                const desc = document.createElement('div');
+                desc.className = 'settings-desc';
+                const author = w.author ? (' • ' + w.author) : '';
+                const version = w.version ? (' • v' + w.version) : '';
+                const d = (w.description || '').trim();
+                desc.textContent = (d ? d : '') + (author || version ? ((d ? '' : ' ') + (author + version).trim()) : '');
+                meta.appendChild(name);
+                meta.appendChild(desc);
+
+                const actions = document.createElement('div');
+                actions.className = 'settings-actions';
+                const up = document.createElement('button');
+                up.className = 'btn';
+                up.type = 'button';
+                up.textContent = 'Up';
+                up.disabled = i === 0;
+                up.addEventListener('click', () => {
+                    const arr = _settingsState.order;
+                    const cur = arr.indexOf(String(w.id));
+                    if (cur > 0) {
+                        const tmp = arr[cur - 1];
+                        arr[cur - 1] = arr[cur];
+                        arr[cur] = tmp;
+                        renderSettingsList();
+                    }
+                });
+                const down = document.createElement('button');
+                down.className = 'btn';
+                down.type = 'button';
+                down.textContent = 'Down';
+                down.disabled = i === (ordered.length - 1);
+                down.addEventListener('click', () => {
+                    const arr = _settingsState.order;
+                    const cur = arr.indexOf(String(w.id));
+                    if (cur >= 0 && cur < arr.length - 1) {
+                        const tmp = arr[cur + 1];
+                        arr[cur + 1] = arr[cur];
+                        arr[cur] = tmp;
+                        renderSettingsList();
+                    }
+                });
+                actions.appendChild(up);
+                actions.appendChild(down);
+
+                row.appendChild(cbWrap);
+                row.appendChild(meta);
+                row.appendChild(actions);
+                settingsList.appendChild(row);
+            }
+        }
+
+        async function loadWidgetSettings() {
+            if (settingsStatus) {
+                settingsStatus.textContent = 'Loading…';
+                settingsStatus.className = 'small';
+            }
+            try {
+                const resp = await fetch('/settings/widgets?t=' + Date.now(), { cache: 'no-store' });
+                _settingsState = await resp.json();
+                if (settingsStatus) settingsStatus.textContent = '';
+                renderSettingsList();
+            } catch (e) {
+                if (settingsStatus) {
+                    settingsStatus.textContent = 'Failed to load widget settings.';
+                    settingsStatus.className = 'error';
+                }
+            }
+        }
+
+        async function saveWidgetSettings() {
+            if (!_settingsState) return;
+            const enabled = {};
+            const widgets = Array.isArray(_settingsState.widgets) ? _settingsState.widgets : [];
+            for (const w of widgets) enabled[String(w.id)] = !!w.enabled;
+            const order = Array.isArray(_settingsState.order) ? _settingsState.order : [];
+
+            try {
+                await fetch('/settings/widgets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, order }),
+                });
+                if (settingsDialog) {
+                    closeDialogAnimated(settingsDialog);
+                }
+                location.reload();
+            } catch (e) {
+                if (settingsStatus) {
+                    settingsStatus.textContent = 'Failed to save.';
+                    settingsStatus.className = 'error';
+                }
+            }
+        }
+
+        if (settingsBtn && settingsDialog) {
+            settingsBtn.addEventListener('click', () => {
+                if (_offline) return;
+                openDialogAnimated(settingsDialog);
+                loadWidgetSettings();
+            });
+        }
+        if (settingsClose && settingsDialog) settingsClose.addEventListener('click', () => {
+            closeDialogAnimated(settingsDialog);
+        });
+        if (settingsSave) settingsSave.addEventListener('click', saveWidgetSettings);
+
+        // Experimental settings dialog (new layout)
+        const expOpenBtn = document.getElementById('exp-settings-open');
+        const expDialog = document.getElementById('exp-settings-dialog');
+        const expClose = document.getElementById('exp-close');
+        const expBack = document.getElementById('exp-back');
+        const expTitle = document.getElementById('exp-title');
+        const expStatus = document.getElementById('exp-status');
+
+        bindDialogAnimationGuards(expDialog);
+
+        const expViewRoot = document.getElementById('exp-view-root');
+        const expViewManage = document.getElementById('exp-view-manage');
+        const expViewShell = document.getElementById('exp-view-shell');
+        const expViewAdvanced = document.getElementById('exp-view-advanced');
+        const expViewExperiments = document.getElementById('exp-view-experiments');
+        const expViewAbout = document.getElementById('exp-view-about');
+        const expViewAboutVersion = document.getElementById('exp-view-about-version');
+        const expViewAboutLegal = document.getElementById('exp-view-about-legal');
+        const expViewLegalPixelNews = document.getElementById('exp-view-legal-pixelnews');
+        const expViewPnTransparency = document.getElementById('exp-view-pn-transparency');
+
+        const expPersonalize = document.getElementById('exp-personalize');
+        const expPersonalizeSub = document.getElementById('exp-personalize-sub');
+        const expPersonalizeChevron = document.getElementById('exp-personalize-chevron');
+
+        const expDiscover = document.getElementById('exp-discover');
+        const expManage = document.getElementById('exp-manage');
+        const expShell = document.getElementById('exp-shell');
+        const expAdvanced = document.getElementById('exp-advanced');
+        const expAbout = document.getElementById('exp-about');
+        const expPersonalizeFeed = document.getElementById('exp-personalize-feed');
+
+        const expManageRearrange = document.getElementById('exp-manage-rearrange');
+        const expManageRemove = document.getElementById('exp-manage-remove');
+
+        const expWin11Warning = document.getElementById('exp-win11-warning');
+        const expOpenTaskbar = document.getElementById('exp-open-taskbar');
+
+        const shOverrideWinW = document.getElementById('sh-override-winw');
+        const shTouchGesture = document.getElementById('sh-touch-gesture');
+        const shTaskbarOverlay = document.getElementById('sh-taskbar-overlay');
+        const shTaskbarDynamic = document.getElementById('sh-taskbar-dynamic');
+        const shOpenHover = document.getElementById('sh-open-hover');
+        const shCycleWeatherCurrent = document.getElementById('sh-cycle-weather-current');
+        const shCycleWeatherPrecip = document.getElementById('sh-cycle-weather-precip');
+        const shCycleNewsTop = document.getElementById('sh-cycle-news-top');
+        const shCycleNewsRandom = document.getElementById('sh-cycle-news-random');
+        const shCycleBdayScience = document.getElementById('sh-cycle-bday-science');
+        const shCycleBdayHistory = document.getElementById('sh-cycle-bday-history');
+        const shCycleBdayArts = document.getElementById('sh-cycle-bday-arts');
+        const shCycleBdayCS = document.getElementById('sh-cycle-bday-cs');
+        const shCycleBdayHackers = document.getElementById('sh-cycle-bday-hackers');
+        const shCycleBdayJournalists = document.getElementById('sh-cycle-bday-journalists');
+
+        const expAboutVersionBtn = document.getElementById('exp-about-version');
+        const expAboutLegalBtn = document.getElementById('exp-about-legal');
+        const expVersionPre = document.getElementById('exp-version-pre');
+        const expLegalPixelNewsBtn = document.getElementById('exp-legal-pixelnews');
+        const expPnTransparencyBtn = document.getElementById('exp-pn-transparency');
+        const expPnHtml = document.getElementById('exp-pn-html');
+
+        const advDisableEffects = document.getElementById('adv-disable-effects');
+        const advDeleteUserfeed = document.getElementById('adv-delete-userfeed');
+        const advOpenExperiments = document.getElementById('adv-open-experiments');
+        const expFlagsList = document.getElementById('exp-flags-list');
+        const expFlagSearch = document.getElementById('exp-flag-search');
+
+        const isWin11 = (document.body && document.body.getAttribute('data-win11') === '1');
+        if (expWin11Warning) expWin11Warning.style.display = isWin11 ? 'block' : 'none';
+
+        let _expViewStack = ['root'];
+        let _expSettings = null;
+        let _expSaveTimer = null;
+
+        let _advancedSettings = null;
+        let _experimentsPayload = null;
+        let _experimentsSaveTimer = null;
+        let _forceEffectModeCache = null;
+
+        let _expFlagFilter = '';
+
+        function _setExpStatus(text, { isError } = { isError: false }) {
+            if (!expStatus) return;
+            expStatus.textContent = String(text || '');
+            expStatus.className = isError ? 'error' : 'small';
+        }
+
+        function _showExpView(view) {
+            const all = [expViewRoot, expViewManage, expViewShell, expViewAdvanced, expViewExperiments, expViewAbout, expViewAboutVersion, expViewAboutLegal, expViewLegalPixelNews, expViewPnTransparency];
+            for (const el of all) {
+                if (!el) continue;
+                el.style.display = (el.getAttribute('data-view') === view) ? 'block' : 'none';
+            }
+            const titles = {
+                'root': 'Settings',
+                'manage': 'Manage widgets',
+                'shell': 'Shell integration',
+                'advanced': 'Advanced settings',
+                'experiments': 'Experiments',
+                'about': 'About',
+                'about-version': 'Version',
+                'about-legal': 'Legal',
+                'legal-pixelnews': 'PixelNews',
+                'pn-transparency': 'Transparency',
+            };
+            if (expTitle) expTitle.textContent = titles[view] || 'Settings';
+            if (expBack) expBack.classList.toggle('visible', _expViewStack.length > 1);
+        }
+
+        function expNavTo(view) {
+            _expViewStack.push(view);
+            _showExpView(view);
+        }
+
+        function expNavBack() {
+            if (_expViewStack.length <= 1) return;
+            _expViewStack.pop();
+            _showExpView(_expViewStack[_expViewStack.length - 1]);
+        }
+
+        async function loadExperimentalSettings() {
+            _setExpStatus('Loading…');
+            try {
+                const resp = await fetch('/settings/experimental?t=' + Date.now(), { cache: 'no-store' });
+                _expSettings = await resp.json();
+                _setExpStatus('');
+                applyExperimentalSettingsToUI();
+            } catch (e) {
+                _setExpStatus('Failed to load experimental settings.', { isError: true });
+            }
+        }
+
+        function _coerceChoiceId(v) {
+            const s = String(v == null ? '' : v).trim();
+            return s || 'default';
+        }
+
+        function _applyVisualEffectsDisabled(disabled) {
+            const on = !!disabled;
+            if (document.body) document.body.classList.toggle('no-effects', on);
+            try {
+                if (!img) return;
+                if (on) {
+                    if (_bgInterval) { clearInterval(_bgInterval); _bgInterval = null; }
+                    img.src = '/static/fallbackbg.png';
+                } else {
+                    if (!_bgInterval) _bgInterval = setInterval(refreshBg, 1000);
+                    refreshBg();
+                }
+            } catch (e) {}
+
+            // Inform the Qt host so it can stop acrylic screenshots + resize animations.
+            try {
+                fetch('/api/runtime/visual-effects', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ disabled: on }),
+                });
+            } catch (e) {}
+        }
+
+        async function loadAdvancedSettings() {
+            try {
+                const resp = await fetch('/settings/advanced?t=' + Date.now(), { cache: 'no-store' });
+                _advancedSettings = await resp.json();
+            } catch (e) {
+                _advancedSettings = { disable_visual_effects: false };
+            }
+            const disabled = !!(_advancedSettings && _advancedSettings.disable_visual_effects);
+            if (advDisableEffects) advDisableEffects.checked = disabled;
+            _applyVisualEffectsDisabled(disabled);
+        }
+
+        async function saveAdvancedSettings() {
+            if (!_advancedSettings) _advancedSettings = { disable_visual_effects: false };
+            try {
+                await fetch('/settings/advanced', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(_advancedSettings),
+                });
+            } catch (e) {}
+        }
+
+        function renderExperiments() {
+            if (!expFlagsList) return;
+            expFlagsList.innerHTML = '';
+
+            const flags = (_experimentsPayload && Array.isArray(_experimentsPayload.flags)) ? _experimentsPayload.flags : [];
+            const q = String(_expFlagFilter || '').trim().toLowerCase();
+            const filtered = q
+                ? flags.filter(f => {
+                    try {
+                        const hay = (
+                            String(f && f.id || '') + ' ' +
+                            String(f && f.name || '') + ' ' +
+                            String(f && f.description || '')
+                        ).toLowerCase();
+                        return hay.includes(q);
+                    } catch (e) {
+                        return false;
+                    }
+                })
+                : flags;
+
+            if (!filtered.length) {
+                const empty = document.createElement('div');
+                empty.className = 'small';
+                empty.textContent = q ? 'No matching experiments.' : 'No experiments found.';
+                expFlagsList.appendChild(empty);
+                return;
+            }
+
+            for (const f of filtered) {
+                const flagId = String(f.id || '').trim();
+                if (!flagId) continue;
+
+                const row = document.createElement('div');
+                row.className = 'exp-item no-icon';
+
+                const meta = document.createElement('div');
+                meta.className = 'exp-meta';
+                const name = document.createElement('div');
+                name.className = 'exp-name';
+                name.textContent = String(f.name || flagId);
+                const desc = document.createElement('div');
+                desc.className = 'exp-desc';
+                const defLbl = String(f.default_choice_name || 'Default');
+                desc.textContent = (String(f.description || '') + (f.description ? ' ' : '') + '(Default: ' + defLbl + ')').trim();
+                meta.appendChild(name);
+                meta.appendChild(desc);
+
+                const right = document.createElement('div');
+                right.className = 'exp-right';
+                const sel = document.createElement('select');
+                sel.className = 'exp-select';
+                const choices = Array.isArray(f.choices) ? f.choices : [];
+                for (const c of choices) {
+                    if (!c) continue;
+                    const cid = _coerceChoiceId(c.id);
+                    const opt = document.createElement('option');
+                    opt.value = cid;
+                    opt.textContent = String(c.name || cid);
+                    sel.appendChild(opt);
+                }
+                sel.value = _coerceChoiceId(f.current_choice);
+                sel.addEventListener('change', () => {
+                    f.current_choice = _coerceChoiceId(sel.value);
+                    queueSaveExperiments();
+                    // Apply runtime effect changes if relevant.
+                    if (flagId === 'disable_visual_effects_on_software_rendering') {
+                        // Re-evaluate auto-disable behavior.
+                        applySoftwareRenderingExperiment();
+                    }
+                });
+                right.appendChild(sel);
+
+                row.appendChild(meta);
+                row.appendChild(right);
+                expFlagsList.appendChild(row);
+            }
+        }
+
+        async function loadExperiments() {
+            try {
+                const resp = await fetch('/settings/experiments?t=' + Date.now(), { cache: 'no-store' });
+                _experimentsPayload = await resp.json();
+            } catch (e) {
+                _experimentsPayload = { flags: [] };
+            }
+            renderExperiments();
+        }
+
+        function queueSaveExperiments() {
+            if (_experimentsSaveTimer) clearTimeout(_experimentsSaveTimer);
+            _experimentsSaveTimer = setTimeout(saveExperiments, 350);
+        }
+
+        async function saveExperiments() {
+            if (!_experimentsPayload) return;
+            try {
+                const out = { flags: {} };
+                const flags = Array.isArray(_experimentsPayload.flags) ? _experimentsPayload.flags : [];
+                for (const f of flags) {
+                    const id = String(f.id || '').trim();
+                    if (!id) continue;
+                    out.flags[id] = _coerceChoiceId(f.current_choice);
+                }
+                await fetch('/settings/experiments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(out),
+                });
+            } catch (e) {}
+        }
+
+        async function _getForceEffectMode() {
+            if (_forceEffectModeCache !== null) return _forceEffectModeCache;
+            try {
+                const resp = await fetch('/api/windows/dwm/forceeffectmode?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                const v = (data && data.value != null) ? Number(data.value) : null;
+                _forceEffectModeCache = (Number.isFinite(v) ? v : null);
+            } catch (e) {
+                _forceEffectModeCache = null;
+            }
+            return _forceEffectModeCache;
+        }
+
+        function _findFlag(id) {
+            const flags = (_experimentsPayload && Array.isArray(_experimentsPayload.flags)) ? _experimentsPayload.flags : [];
+            for (const f of flags) {
+                if (String(f.id || '').trim() === id) return f;
+            }
+            return null;
+        }
+
+        function _effectiveChoice(flag) {
+            if (!flag) return 'default';
+            const cur = _coerceChoiceId(flag.current_choice);
+            if (cur !== 'default') return cur;
+            const def = _coerceChoiceId(flag.default_choice);
+            return def === 'default' ? 'default' : def;
+        }
+
+        function _looksLikeSoftwareRenderer(s) {
+            const t = String(s || '').toLowerCase();
+            return (
+                t.includes('swiftshader') ||
+                t.includes('microsoft basic render') ||
+                t.includes('microsoft basic display') ||
+                t.includes('llvmpipe') ||
+                t.includes('software')
+            );
+        }
+
+        function _detectSoftwareRendering() {
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (!gl) return true;
+                const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+                let renderer = '';
+                if (dbg) renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+                if (!renderer) renderer = gl.getParameter(gl.RENDERER);
+                return _looksLikeSoftwareRenderer(renderer);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function applySoftwareRenderingExperiment() {
+            try {
+                if (_advancedSettings && _advancedSettings.disable_visual_effects) {
+                    _applyVisualEffectsDisabled(true);
+                    return;
+                }
+                // If we haven't loaded experiments yet, skip.
+                const flag = _findFlag('disable_visual_effects_on_software_rendering');
+                if (!flag) return;
+                const choice = _effectiveChoice(flag);
+                const enabled = String(choice).toLowerCase().startsWith('enabled');
+                if (!enabled) return;
+
+                const isSoft = _detectSoftwareRendering();
+                if (!isSoft) return;
+
+                const ch = String(choice).toLowerCase();
+                const useForce = ch.includes('use_force_effect_mode');
+                const ignoreForce = ch.includes('ignore_force_effect_mode');
+                const respectForce = useForce && !ignoreForce;
+                if (respectForce) {
+                    const v = await _getForceEffectMode();
+                    if (v === 2) return; // allow effects anyway
+                }
+
+                _applyVisualEffectsDisabled(true);
+            } catch (e) {}
+        }
+
+        async function deleteUserFeedConfig() {
+            const ok = confirm('Delete your userfeedconfig.json? This resets PixelNews personalization (blocked sources, followed channels, region).');
+            if (!ok) return;
+            try {
+                await fetch('/api/userfeedconfig/delete?t=' + Date.now(), { method: 'POST' });
+                emitUserFeedConfigChanged();
+                alert('User feed config deleted.');
+            } catch (e) {
+                alert('Failed to delete user feed config.');
+            }
+        }
+
+        function _get(obj, path, fallback) {
+            try {
+                const parts = String(path || '').split('.').filter(Boolean);
+                let cur = obj;
+                for (const p of parts) {
+                    if (!cur || typeof cur !== 'object') return fallback;
+                    cur = cur[p];
+                }
+                return cur == null ? fallback : cur;
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        function _set(obj, path, value) {
+            const parts = String(path || '').split('.').filter(Boolean);
+            if (!parts.length) return;
+            let cur = obj;
+            for (let i = 0; i < parts.length - 1; i++) {
+                const p = parts[i];
+                if (!cur[p] || typeof cur[p] !== 'object') cur[p] = {};
+                cur = cur[p];
+            }
+            cur[parts[parts.length - 1]] = value;
+        }
+
+        function applyExperimentalSettingsToUI() {
+            if (!_expSettings) return;
+
+            if (shOverrideWinW) shOverrideWinW.checked = !!_get(_expSettings, 'shell_integration.override_win_w', false);
+            if (shTouchGesture) shTouchGesture.checked = !!_get(_expSettings, 'shell_integration.touch_gesture', false);
+            if (shTaskbarOverlay) shTaskbarOverlay.checked = !!_get(_expSettings, 'shell_integration.taskbar.overlay', false);
+            if (shTaskbarDynamic) shTaskbarDynamic.checked = !!_get(_expSettings, 'shell_integration.taskbar.dynamic', false);
+            if (shOpenHover) shOpenHover.checked = !!_get(_expSettings, 'shell_integration.taskbar.open_on_hover', false);
+
+            if (shCycleWeatherCurrent) shCycleWeatherCurrent.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.weather.current_conditions', true);
+            if (shCycleWeatherPrecip) shCycleWeatherPrecip.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.weather.next_precip', true);
+            if (shCycleNewsTop) shCycleNewsTop.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.news.top_story', true);
+            if (shCycleNewsRandom) shCycleNewsRandom.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.news.random_story', false);
+
+            if (shCycleBdayScience) shCycleBdayScience.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.science', true);
+            if (shCycleBdayHistory) shCycleBdayHistory.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.history', true);
+            if (shCycleBdayArts) shCycleBdayArts.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.arts', true);
+            if (shCycleBdayCS) shCycleBdayCS.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.computer_science', true);
+            if (shCycleBdayHackers) shCycleBdayHackers.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.hackers', true);
+            if (shCycleBdayJournalists) shCycleBdayJournalists.checked = !!_get(_expSettings, 'shell_integration.taskbar.cycle.birthdays.journalists', true);
+        }
+
+        function queueSaveExperimentalSettings() {
+            if (_expSaveTimer) clearTimeout(_expSaveTimer);
+            _expSaveTimer = setTimeout(saveExperimentalSettings, 350);
+        }
+
+        async function saveExperimentalSettings() {
+            if (!_expSettings) return;
+            _setExpStatus('Saving…');
+            try {
+                await fetch('/settings/experimental', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(_expSettings),
+                });
+                _setExpStatus('Saved.');
+                setTimeout(() => { if (expStatus && expStatus.textContent === 'Saved.') _setExpStatus(''); }, 800);
+            } catch (e) {
+                _setExpStatus('Failed to save.', { isError: true });
+            }
+        }
+
+        function bindExpBool(el, path) {
+            if (!el) return;
+            el.addEventListener('change', () => {
+                if (!_expSettings) _expSettings = {};
+                _set(_expSettings, path, !!el.checked);
+                queueSaveExperimentalSettings();
+            });
+        }
+
+        bindExpBool(shOverrideWinW, 'shell_integration.override_win_w');
+        bindExpBool(shTouchGesture, 'shell_integration.touch_gesture');
+        bindExpBool(shTaskbarOverlay, 'shell_integration.taskbar.overlay');
+        bindExpBool(shTaskbarDynamic, 'shell_integration.taskbar.dynamic');
+        bindExpBool(shOpenHover, 'shell_integration.taskbar.open_on_hover');
+        bindExpBool(shCycleWeatherCurrent, 'shell_integration.taskbar.cycle.weather.current_conditions');
+        bindExpBool(shCycleWeatherPrecip, 'shell_integration.taskbar.cycle.weather.next_precip');
+        bindExpBool(shCycleNewsTop, 'shell_integration.taskbar.cycle.news.top_story');
+        bindExpBool(shCycleNewsRandom, 'shell_integration.taskbar.cycle.news.random_story');
+        bindExpBool(shCycleBdayScience, 'shell_integration.taskbar.cycle.birthdays.science');
+        bindExpBool(shCycleBdayHistory, 'shell_integration.taskbar.cycle.birthdays.history');
+        bindExpBool(shCycleBdayArts, 'shell_integration.taskbar.cycle.birthdays.arts');
+        bindExpBool(shCycleBdayCS, 'shell_integration.taskbar.cycle.birthdays.computer_science');
+        bindExpBool(shCycleBdayHackers, 'shell_integration.taskbar.cycle.birthdays.hackers');
+        bindExpBool(shCycleBdayJournalists, 'shell_integration.taskbar.cycle.birthdays.journalists');
+
+        if (advDisableEffects) advDisableEffects.addEventListener('change', async () => {
+            if (!_advancedSettings) _advancedSettings = { disable_visual_effects: false };
+            _advancedSettings.disable_visual_effects = !!advDisableEffects.checked;
+            _applyVisualEffectsDisabled(!!_advancedSettings.disable_visual_effects);
+            await saveAdvancedSettings();
+        });
+        if (advDeleteUserfeed) advDeleteUserfeed.addEventListener('click', deleteUserFeedConfig);
+
+        async function openTaskbarSettings() {
+            try {
+                await fetch('/open-taskbar-settings?t=' + Date.now(), { method: 'POST' });
+            } catch (e) {}
+        }
+        if (expOpenTaskbar) expOpenTaskbar.addEventListener('click', openTaskbarSettings);
+
+        async function loadAboutVersion() {
+            if (!expVersionPre) return;
+            expVersionPre.textContent = 'Loading…';
+            try {
+                const resp = await fetch('/about/version?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                const lines = [];
+                lines.push('OpenWidgets: ' + String(data.openwidgets_version || 'unknown'));
+                lines.push('Python: ' + String(data.python || 'unknown'));
+                lines.push('OS: ' + String(data.os || 'unknown'));
+                lines.push('');
+                lines.push('Installed widgets:');
+                const ws = Array.isArray(data.widgets) ? data.widgets : [];
+                if (!ws.length) lines.push('  (none)');
+                for (const w of ws) {
+                    const id = String(w.id || '');
+                    const name = String(w.name || id);
+                    const ver = w.version ? (' v' + String(w.version)) : '';
+                    lines.push('  - ' + name + ' (' + id + ')' + ver);
+                }
+                expVersionPre.textContent = lines.join('\\n');
+            } catch (e) {
+                expVersionPre.textContent = 'Failed to load version information.';
+            }
+        }
+
+        async function loadPixelNewsTransparency() {
+            if (!expPnHtml) return;
+            expPnHtml.textContent = 'Loading…';
+            try {
+                const resp = await fetch('/about/pixelnews/transparency?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                if (data && typeof data.html === 'string' && data.html.trim()) {
+                    expPnHtml.innerHTML = data.html;
+                } else {
+                    expPnHtml.textContent = 'No transparency information available.';
+                }
+            } catch (e) {
+                expPnHtml.textContent = 'Failed to load transparency information.';
+            }
+        }
+
+        function openAccountDialogFromSettings() {
+            try {
+                if (_offline) return;
+                if (!accountDialog) return;
+                refreshAvatar();
+                openDialogAnimated(accountDialog);
+                selectAccountTab('discover');
+                loadChannelsAndRender({ filter: accountSearch ? accountSearch.value : '' });
+            } catch (e) {}
+        }
+        window.openAccountDialog = openAccountDialogFromSettings;
+
+        function openExperimentalSettings() {
+            if (_offline) return;
+            if (!expDialog) return;
+            _expViewStack = ['root'];
+            _showExpView('root');
+            _setExpStatus('');
+            if (expPersonalizeSub) expPersonalizeSub.classList.remove('visible');
+            if (expPersonalizeChevron) expPersonalizeChevron.textContent = '⌄';
+            openDialogAnimated(expDialog);
+            loadExperimentalSettings();
+            // Advanced settings are independent from /settings/experimental.
+            loadAdvancedSettings();
+        }
+
+        if (expOpenBtn) expOpenBtn.addEventListener('click', openExperimentalSettings);
+        if (expClose && expDialog) expClose.addEventListener('click', () => {
+            closeDialogAnimated(expDialog);
+        });
+        if (expBack) expBack.addEventListener('click', expNavBack);
+
+        if (expPersonalize && expPersonalizeSub) {
+            expPersonalize.addEventListener('click', () => {
+                const isOpen = expPersonalizeSub.classList.toggle('visible');
+                if (expPersonalizeChevron) expPersonalizeChevron.textContent = isOpen ? '⌃' : '⌄';
+            });
+        }
+
+        if (expPersonalizeFeed) expPersonalizeFeed.addEventListener('click', () => {
+            openAccountDialogFromSettings();
+        });
+
+        if (expManage) expManage.addEventListener('click', () => expNavTo('manage'));
+        if (expShell) expShell.addEventListener('click', () => expNavTo('shell'));
+        if (expAdvanced) expAdvanced.addEventListener('click', async () => {
+            expNavTo('advanced');
+            await loadAdvancedSettings();
+            await loadExperiments();
+            await applySoftwareRenderingExperiment();
+        });
+
+        if (advOpenExperiments) advOpenExperiments.addEventListener('click', async () => {
+            expNavTo('experiments');
+            await loadExperiments();
+        });
+
+        if (expFlagSearch) {
+            expFlagSearch.addEventListener('input', () => {
+                _expFlagFilter = expFlagSearch.value;
+                renderExperiments();
+            });
+        }
+        if (expAbout) expAbout.addEventListener('click', () => expNavTo('about'));
+
+        if (expManageRearrange) expManageRearrange.addEventListener('click', () => {
+            // Open the existing widget settings.
+            try {
+                if (expDialog && expDialog.open) closeDialogAnimated(expDialog);
+            } catch (e) {}
+            try {
+                openDialogAnimated(settingsDialog);
+                loadWidgetSettings();
+            } catch (e) {}
+        });
+        if (expManageRemove) expManageRemove.addEventListener('click', () => {
+            // Same place (enable/disable).
+            try {
+                if (expDialog && expDialog.open) closeDialogAnimated(expDialog);
+            } catch (e) {}
+            try {
+                openDialogAnimated(settingsDialog);
+                loadWidgetSettings();
+            } catch (e) {}
+        });
+
+        if (expAboutVersionBtn) expAboutVersionBtn.addEventListener('click', async () => {
+            expNavTo('about-version');
+            await loadAboutVersion();
+        });
+        if (expAboutLegalBtn) expAboutLegalBtn.addEventListener('click', () => {
+            expNavTo('about-legal');
+        });
+        if (expLegalPixelNewsBtn) expLegalPixelNewsBtn.addEventListener('click', () => {
+            expNavTo('legal-pixelnews');
+        });
+        if (expPnTransparencyBtn) expPnTransparencyBtn.addEventListener('click', async () => {
+            expNavTo('pn-transparency');
+            await loadPixelNewsTransparency();
+        });
+
+        if (expDiscover) expDiscover.addEventListener('click', () => {
+            _setExpStatus('Discover new widgets is not implemented yet.');
+        });
+
+        // Apply advanced settings ASAP on page load.
+        (async () => {
+            await loadAdvancedSettings();
+            await loadExperiments();
+            await applySoftwareRenderingExperiment();
+        })();
+
+        // OOBE (first-run setup)
+        const oobeDialog = document.getElementById('oobe-dialog');
+        const oobeClose = document.getElementById('oobe-close');
+        const oobeBack = document.getElementById('oobe-back');
+        const oobeNext = document.getElementById('oobe-next');
+        const oobeProgress = document.getElementById('oobe-progress');
+        const oobeRegion = document.getElementById('oobe-region');
+        const oobeSources = document.getElementById('oobe-sources');
+        const oobeSourcesStatus = document.getElementById('oobe-sources-status');
+        const oobeLocIp = document.getElementById('oobe-loc-ip');
+        const oobeLocManual = document.getElementById('oobe-loc-manual');
+        const oobeManualWrap = document.getElementById('oobe-manual-wrap');
+        const oobeLat = document.getElementById('oobe-lat');
+        const oobeLon = document.getElementById('oobe-lon');
+        const oobeCity = document.getElementById('oobe-city');
+        const oobeCc = document.getElementById('oobe-cc');
+        const oobeUnits = document.getElementById('oobe-units');
+        const oobeIpStatus = document.getElementById('oobe-ip-status');
+        const oobeDoneStatus = document.getElementById('oobe-done-status');
+
+        if (oobeDialog) bindDialogAnimationGuards(oobeDialog);
+
+        const _oobeSteps = ['welcome', 'region', 'sources', 'location', 'units', 'done'];
+        let _oobeStepIndex = 0;
+        let _oobeSelectedSourceIds = new Set();
+        let _oobeAllSourceIds = [];
+
+        function _oobeShowStep(i) {
+            _oobeStepIndex = Math.max(0, Math.min(_oobeSteps.length - 1, i));
+            const name = _oobeSteps[_oobeStepIndex];
+            const steps = Array.from(document.querySelectorAll('#oobe-dialog [data-oobe-step]'));
+            for (const el of steps) el.classList.toggle('active', el.getAttribute('data-oobe-step') === name);
+
+            if (oobeBack) oobeBack.disabled = (_oobeStepIndex === 0);
+            if (oobeNext) oobeNext.textContent = (_oobeStepIndex === (_oobeSteps.length - 1)) ? 'OK' : 'Next';
+            if (oobeProgress) oobeProgress.textContent = 'Step ' + (_oobeStepIndex + 1) + ' of ' + _oobeSteps.length;
+        }
+
+        function _oobeLocationMode() {
+            return (oobeLocManual && oobeLocManual.checked) ? 'manual' : 'ip';
+        }
+
+        function _oobeUpdateLocationUI() {
+            const manual = (_oobeLocationMode() === 'manual');
+            if (oobeManualWrap) oobeManualWrap.style.display = manual ? 'block' : 'none';
+        }
+
+        async function _oobeLoadIpLocation() {
+            if (!oobeIpStatus) return;
+            oobeIpStatus.textContent = 'Looking up location…';
+            try {
+                const resp = await fetch('/api/oobe/ip-location?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                const loc = data && data.location;
+                if (loc && typeof loc === 'object') {
+                    const city = (loc.city || '').toString().trim();
+                    const cc = (loc.country_code || '').toString().trim();
+                    const lat = (loc.lat != null) ? Number(loc.lat) : null;
+                    const lon = (loc.lon != null) ? Number(loc.lon) : null;
+                    const parts = [];
+                    if (city) parts.push(city);
+                    if (cc) parts.push(cc);
+                    if (Number.isFinite(lat) && Number.isFinite(lon)) parts.push('(' + lat.toFixed(3) + ', ' + lon.toFixed(3) + ')');
+                    oobeIpStatus.textContent = parts.length ? ('Detected: ' + parts.join(' ')) : 'Detected your location.';
+                } else {
+                    oobeIpStatus.textContent = (data && data.error) ? String(data.error) : 'Could not detect location.';
+                }
+            } catch (e) {
+                oobeIpStatus.textContent = 'Could not detect location.';
+            }
+        }
+
+        async function _oobeLoadSources() {
+            if (!oobeSources || !oobeSourcesStatus) return;
+            oobeSources.innerHTML = '';
+            oobeSourcesStatus.textContent = 'Loading…';
+
+            // Ensure region_language is persisted early so the news widget gets correct defaults.
+            try {
+                await fetch('/api/userfeedconfig', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ region_language: String((oobeRegion && oobeRegion.value) || 'United States (English)'), hidden_sources: [] }),
+                });
+            } catch (e) {}
+
+            let sources = [];
+            try {
+                const resp = await fetch('/widgets/windows_central/stories.json?limit=1&offset=0&t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                sources = Array.isArray(data && data.sources) ? data.sources : [];
+            } catch (e) {
+                sources = [];
+            }
+
+            if (!sources.length) {
+                oobeSourcesStatus.textContent = 'No sources found (you can change this later).';
+                _oobeAllSourceIds = [];
+                _oobeSelectedSourceIds = new Set();
+                return;
+            }
+
+            oobeSourcesStatus.textContent = '';
+            _oobeAllSourceIds = sources.map(s => (s && s.id ? String(s.id) : '')).filter(Boolean);
+            _oobeSelectedSourceIds = new Set(_oobeAllSourceIds);
+
+            for (const s of sources) {
+                const sid = s && s.id ? String(s.id) : '';
+                const name = s && s.name ? String(s.name) : sid;
+                const url = s && s.url ? String(s.url) : '';
+                const tagline = s && s.tagline ? String(s.tagline) : '';
+                if (!sid) continue;
+
+                const row = document.createElement('div');
+                row.className = 'source-item';
+
+                const cbWrap = document.createElement('div');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = true;
+                cbWrap.appendChild(cb);
+
+                const meta = document.createElement('div');
+                meta.style.minWidth = '0';
+                meta.innerHTML = `<div class="source-name">${esc(name)}</div>`
+                    + (tagline ? `<div class="source-sub">${esc(tagline)}</div>` : '')
+                    + (url ? `<div class="source-sub">${esc(url)}</div>` : '');
+
+                cb.addEventListener('change', () => {
+                    if (cb.checked) _oobeSelectedSourceIds.add(sid);
+                    else _oobeSelectedSourceIds.delete(sid);
+                });
+
+                row.appendChild(cbWrap);
+                row.appendChild(meta);
+                oobeSources.appendChild(row);
+            }
+        }
+
+        async function _oobeComplete() {
+            const regionLanguage = String((oobeRegion && oobeRegion.value) || 'United States (English)');
+            const hidden = [];
+            for (const sid of _oobeAllSourceIds) {
+                if (!_oobeSelectedSourceIds.has(sid)) hidden.push(sid);
+            }
+
+            const locationMode = _oobeLocationMode();
+            const payload = {
+                region_language: regionLanguage,
+                hidden_sources: hidden,
+                temp_unit: (oobeUnits && oobeUnits.value) ? String(oobeUnits.value) : 'F',
+                location_mode: locationMode,
+                manual: {
+                    lat: oobeLat ? String(oobeLat.value || '').trim() : '',
+                    lon: oobeLon ? String(oobeLon.value || '').trim() : '',
+                    city_name: oobeCity ? String(oobeCity.value || '').trim() : '',
+                    country_code: oobeCc ? String(oobeCc.value || '').trim() : '',
+                }
+            };
+
+            if (oobeDoneStatus) {
+                oobeDoneStatus.textContent = 'Saving…';
+                oobeDoneStatus.className = 'small';
+            }
+
+            try {
+                await fetch('/api/oobe/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (oobeDoneStatus) oobeDoneStatus.textContent = 'Saved. Refreshing…';
+                location.reload();
+            } catch (e) {
+                if (oobeDoneStatus) {
+                    oobeDoneStatus.textContent = 'Failed to save setup.';
+                    oobeDoneStatus.className = 'error';
+                }
+            }
+        }
+
+        async function maybeOpenOobe() {
+            if (_offline) return;
+            if (!oobeDialog) return;
+
+            let needs = false;
+            try {
+                const resp = await fetch('/api/oobe/status?t=' + Date.now(), { cache: 'no-store' });
+                const data = await resp.json();
+                needs = !!(data && data.needs_oobe);
+            } catch (e) {
+                needs = false;
+            }
+
+            try {
+                document.body.classList.toggle('oobe-active', !!needs);
+            } catch (e) {}
+
+            if (!needs) return;
+
+            // OOBE requirements:
+            // - close disabled
+            // - hide widgets
+            // - feed expanded
+            try {
+                if (oobeClose) oobeClose.disabled = true;
+            } catch (e) {}
+            try {
+                await setFeedExpanded(true);
+            } catch (e) {}
+
+            // Prevent closing via Escape.
+            try {
+                oobeDialog.addEventListener('cancel', (e) => {
+                    try { e.preventDefault(); } catch (e2) {}
+                });
+            } catch (e) {}
+
+            _oobeShowStep(0);
+            openDialogAnimated(oobeDialog);
+            _oobeUpdateLocationUI();
+            _oobeLoadIpLocation();
+        }
+
+        // Close button intentionally disabled during OOBE.
+        if (oobeLocIp) oobeLocIp.addEventListener('change', _oobeUpdateLocationUI);
+        if (oobeLocManual) oobeLocManual.addEventListener('change', _oobeUpdateLocationUI);
+
+        if (oobeBack) oobeBack.addEventListener('click', () => {
+            _oobeShowStep(_oobeStepIndex - 1);
+        });
+
+        if (oobeNext) oobeNext.addEventListener('click', async () => {
+            const step = _oobeSteps[_oobeStepIndex];
+
+            if (step === 'region') {
+                // Persist chosen region early to ensure sources list matches.
+                try {
+                    await fetch('/api/userfeedconfig', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ region_language: String((oobeRegion && oobeRegion.value) || ''), hidden_sources: [] }),
+                    });
+                } catch (e) {}
+            }
+
+            if (step === 'sources') {
+                // Ensure user selected at least one.
+                if (_oobeAllSourceIds.length && _oobeSelectedSourceIds.size === 0) {
+                    if (oobeSourcesStatus) {
+                        oobeSourcesStatus.textContent = 'Select at least one source.';
+                        oobeSourcesStatus.className = 'error';
+                    }
+                    return;
+                }
+            }
+
+            if (step === 'location') {
+                if (_oobeLocationMode() === 'manual') {
+                    const lat = oobeLat ? String(oobeLat.value || '').trim() : '';
+                    const lon = oobeLon ? String(oobeLon.value || '').trim() : '';
+                    if (!lat || !lon) {
+                        alert('Please enter both latitude and longitude.');
+                        return;
+                    }
+                }
+            }
+
+            if (step === 'welcome') {
+                _oobeShowStep(1);
+                return;
+            }
+
+            if (step === 'region') {
+                _oobeShowStep(2);
+                await _oobeLoadSources();
+                return;
+            }
+
+            if (_oobeStepIndex === (_oobeSteps.length - 1)) {
+                await _oobeComplete();
+                return;
+            }
+
+            _oobeShowStep(_oobeStepIndex + 1);
+        });
+
+        // Kick off OOBE check after initial page load wiring.
+        setTimeout(maybeOpenOobe, 200);
+    </script>
+
+    {{ widgets_js|safe }}
+</body>
+</html>

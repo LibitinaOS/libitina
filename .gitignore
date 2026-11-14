@@ -13,3 +13,4 @@ panic*
 *.DS_Store
 Code/Stockwood/Monika/built/*
 Code/Ranboo/RanbooSwiftUI/RanbooSwiftUI.xcodeproj/project.xcworkspace/xcuserdata/dapixelprowler.xcuserdatad/UserInterfaceState.xcuserstate
+OpenWidgets/userfeedconfig.json

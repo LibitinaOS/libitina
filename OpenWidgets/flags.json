@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "flags": [
+    {
+      "id": "disable_visual_effects_on_software_rendering",
+      "name": "Disable visual effects on software rendering",
+      "description": "Turns off pseudo-acrylic blur effects when the GPU renderer appears to be software (e.g. SwiftShader, Microsoft Basic Render Driver).",
+      "default": "disabled",
+      "choices": [
+        {
+          "id": "default",
+          "name": "Default",
+          "description": "Use the default behavior for this flag."
+        },
+        {
+          "id": "enabled_use_force_effect_mode",
+          "name": "Enable (use ForceEffectMode=2)",
+          "description": "Disable effects on software rendering, but keep effects enabled if HKLM\\SOFTWARE\\Microsoft\\Windows\\Dwm\\ForceEffectMode is 2 (useful for Hyper-V VMs)."
+        },
+        {
+          "id": "enabled_ignore_force_effect_mode",
+          "name": "Enable (ignore ForceEffectMode=2)",
+          "description": "Disable effects on software rendering even if ForceEffectMode=2 is set."
+        },
+        {
+          "id": "disabled",
+          "name": "Disable",
+          "description": "Do not change visual effects based on software rendering."
+        }
+      ]
+    },
+    {
+      "id": "use_system_proxy_for_requests",
+      "name": "Use system proxy for requests",
+      "description": "When enabled, outbound HTTP(S) requests can use proxy settings from the environment / OS. When disabled, requests bypass system proxy settings.",
+      "default": "enabled",
+      "choices": [
+        {
+          "id": "default",
+          "name": "Default",
+          "description": "Use the default behavior for this flag."
+        },
+        {
+          "id": "enabled",
+          "name": "Enable",
+          "description": "Allow HTTP clients to use system/environment proxy settings."
+        },
+        {
+          "id": "disabled",
+          "name": "Disable",
+          "description": "Do not use system/environment proxy settings for outbound HTTP requests."
+        }
+      ]
+    },
+    {
+      "id": "show_display_name_in_expanded_greeting",
+      "name": "Show display name in expanded greeting",
+      "description": "When enabled, the dashboard greeting will include a detected display name while the feed is expanded (e.g. 'Good morning, GitHub Copilot!').",
+      "default": "disabled",
+      "choices": [
+        {
+          "id": "default",
+          "name": "Default",
+          "description": "Use the default behavior for this flag."
+        },
+        {
+          "id": "enabled",
+          "name": "Enable",
+          "description": "Enable display name detection using the default method for your OS."
+        },
+        {
+          "id": "enabled_force_win",
+          "name": "Enable (force win)",
+          "description": "Force the Windows method to get the display name."
+        },
+        {
+          "id": "enabled_force_darwin",
+          "name": "Enable (force darwin)",
+          "description": "Force the macOS method to get the display name."
+        },
+        {
+          "id": "enabled_force_linux",
+          "name": "Enable (force linux)",
+          "description": "Force the Linux/Unix method to get the display name."
+        },
+        {
+          "id": "enabled_force_accmail",
+          "name": "Enable (force accmail)",
+          "description": "Use userfeedconfig.json account.email as the display name."
+        },
+        {
+          "id": "enabled_force_maarcr",
+          "name": "Enable (force MaArCr)",
+          "description": "Force the display name to be 'maia arson crimew' (skips detection)."
+        },
+        {
+          "id": "disabled",
+          "name": "Disable",
+          "description": "Do not include a display name in the expanded greeting."
+        }
+      ]
+    }
+  ]
+}

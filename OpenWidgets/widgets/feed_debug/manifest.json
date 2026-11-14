@@ -1,0 +1,6 @@
+{
+  "name": "Feed Debug",
+  "author": "Widgets",
+  "description": "Debug info for the news feed sources (fetch success, last errors).",
+  "version": "1.0"
+}
