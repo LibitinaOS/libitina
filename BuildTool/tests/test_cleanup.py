@@ -1,5 +1,6 @@
 import contextlib
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,9 +25,37 @@ class CleanupTests(unittest.TestCase):
                                if '/usr/share/libitina/YuiHirasawa/install-debian.sh' in call.args]
             self.assertEqual(installer_calls, [(
                 'chroot', root, 'env', '-i', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
-                'HOME=/root', 'USER=root', 'LOGNAME=root',
+                'HOME=/root', 'USER=root', 'LOGNAME=root', 'LANG=C', 'LC_ALL=C',
                 'DEBIAN_FRONTEND=noninteractive', 'bash',
                 '/usr/share/libitina/YuiHirasawa/install-debian.sh')])
+
+    def test_bootable_guest_installs_grub_tools_and_checks_them(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
+            builder.install_guest(Path(temp), SimpleNamespace(root_password=None), True)
+            calls = [call.args for call in run.call_args_list]
+            installation = next(args for args in calls if 'install' in args and 'apt-get' in args)
+            self.assertIn('grub2-common', installation)
+            self.assertIn('grub-efi-amd64-bin', installation)
+            self.assertIn('libpam-systemd', installation)
+            verification = next(args for args in calls if 'verify-guest-commands' in args)
+            self.assertIn('grub-install', verification)
+            self.assertIn('update-grub', verification)
+
+    def test_chroot_environment_has_no_host_identity_or_locale(self):
+        with patch.dict(os.environ, {'SUDO_USER': 'host-user', 'LANG': 'unavailable.UTF-8',
+                                     'LC_ALL': 'unavailable.UTF-8', 'XDG_CONFIG_HOME': '/host/config'}), \
+                patch.object(builder.subprocess, 'run') as run:
+            builder.run('chroot', '/guest', 'apt-get', 'update')
+            environment = run.call_args.kwargs['env']
+            self.assertEqual(environment['LC_ALL'], 'C')
+            self.assertEqual(environment['LANG'], 'C')
+            self.assertEqual(environment['USER'], 'root')
+            self.assertNotIn('SUDO_USER', environment)
+            self.assertNotIn('XDG_CONFIG_HOME', environment)
+            self.assertIn('/usr/sbin', environment['PATH'].split(':'))
 
     def test_all_unmounts_attempted_preserving_build_error(self):
         with patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')) as run:

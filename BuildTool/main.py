@@ -2,8 +2,9 @@
 """Build Debian rootfs ZIPs, expandable raw images, or sparse 20-GiB QCOW2 disks.
 
 Linux x86_64 host, root privileges, Debian amd64 guest, UEFI boot.
-Requires: debootstrap, parted, util-linux, e2fsprogs, dosfstools, grub-efi-amd64-bin,
-          grub-common, qemu-utils (for qcow2), git, python3.
+Host requires: debootstrap, coreutils, mount, util-linux, parted, udev,
+               e2fsprogs, dosfstools, qemu-utils (for qcow2), git, python3.
+Guest packages (including GRUB) are installed automatically.
 
 WARNING: Builds use loop devices and mount namespaces; run on a trusted Linux host.
 """
@@ -28,6 +29,15 @@ MIB = 1024 ** 2
 
 def run(*args, capture=False, **kw):
     print('+', ' '.join(map(str, args)), flush=True)
+    environment = dict(kw.pop('env', os.environ))
+    environment.update(LANG='C', LC_ALL='C')
+    if args and str(args[0]) == 'chroot':
+        environment = {
+            'PATH': '/usr/sbin:/usr/bin:/sbin:/bin',
+            'HOME': '/root', 'USER': 'root', 'LOGNAME': 'root',
+            'LANG': 'C', 'LC_ALL': 'C', 'DEBIAN_FRONTEND': 'noninteractive',
+        }
+    kw['env'] = environment
     return subprocess.run(list(map(str, args)), check=True,
                           text=True, capture_output=capture, **kw)
 
@@ -190,12 +200,12 @@ def chroot_mounts(root):
 
 
 def install_guest(root, args, bootable):
-    packages = ['systemd-sysv', 'dbus', 'ca-certificates', 'iproute2',
+    packages = ['systemd-sysv', 'libpam-systemd', 'tzdata', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd']
     if bootable:
         packages += ['linux-image-amd64', 'grub-efi-amd64-bin',
-                     'grub-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
+                     'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
     with chroot_mounts(root), inhibit_services(root):
         run('chroot', root, 'apt-get', 'update')
         run('chroot', root, 'env', 'DEBIAN_FRONTEND=noninteractive',
@@ -204,8 +214,10 @@ def install_guest(root, args, bootable):
         # chroot changes the filesystem, not the inherited host environment.
         run('chroot', root, 'env', '-i',
             'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'HOME=/root',
-            'USER=root', 'LOGNAME=root', 'DEBIAN_FRONTEND=noninteractive',
+            'USER=root', 'LOGNAME=root', 'LANG=C', 'LC_ALL=C',
+            'DEBIAN_FRONTEND=noninteractive',
             'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
+        verify_guest_commands(root, bootable)
         run('chroot', root, 'apt-get', 'clean')
         configure_oobe(root)
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
@@ -225,6 +237,19 @@ def install_guest(root, args, bootable):
     (root / 'etc/systemd/system/multi-user.target.wants').mkdir(parents=True, exist_ok=True)
     link = root / 'etc/systemd/system/multi-user.target.wants/regenerate-ssh-keys.service'
     link.symlink_to('../regenerate-ssh-keys.service')
+
+
+def verify_guest_commands(root, bootable):
+    commands = ['python3', 'labwc', 'lightdm', 'lightdm-gtk-greeter', 'nmcli',
+                'sshd', 'ssh-keygen', 'sudo', 'systemctl', 'loginctl', 'localectl',
+                'timedatectl', 'hostnamectl', 'useradd', 'userdel', 'chpasswd',
+                'locale-gen', 'debconf-set-selections', 'dpkg-reconfigure', 'dbus-run-session']
+    if bootable:
+        commands += ['grub-install', 'update-grub', 'growpart', 'resize2fs']
+    run('chroot', root, 'sh', '-ec',
+        'for command do command -v "$command" >/dev/null || '
+        '{ echo "Missing guest command: $command" >&2; exit 1; }; done',
+        'verify-guest-commands', *commands)
 
 
 def configure_oobe(root):

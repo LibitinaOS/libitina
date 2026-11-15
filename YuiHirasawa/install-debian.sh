@@ -79,6 +79,7 @@ packages=(
     wireplumber
     wlr-randr
     libpam0g
+    libpam-systemd
     python3
     # Trixie's python3-pywayland does not pull in its CFFI runtime.
     python3-cffi-backend
