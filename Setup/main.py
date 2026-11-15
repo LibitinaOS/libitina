@@ -252,8 +252,9 @@ class SetupWizard(Gtk.Window):
             if not fullname:
                 self.show_error('Please enter your full name.')
                 return False
-            if not re.fullmatch(r'[a-z_][a-z0-9_-]*', username):
-                self.show_error('Enter a valid lowercase username.')
+            if (not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', username)
+                    or username in {'root', 'defaultuser0'}):
+                self.show_error('Enter a lowercase username of at most 32 characters (root and defaultuser0 are reserved).')
                 return False
             if len(password) < 8:
                 self.show_error('Password must be at least 8 characters.')
@@ -326,7 +327,10 @@ class SetupWizard(Gtk.Window):
         dialog = Gtk.MessageDialog(transient_for=self, flags=Gtk.DialogFlags.MODAL,
                                    message_type=Gtk.MessageType.INFO,
                                    buttons=Gtk.ButtonsType.OK, text='Setup complete')
-        dialog.format_secondary_text(f'Configuration saved to:\n{output}')
+        dialog.format_secondary_text('Your account and system settings will now be applied. '
+                                     'The computer will restart when setup is finished.'
+                                     if os.environ.get('USER') == 'defaultuser0' else
+                                     f'Configuration saved to:\n{output}')
         dialog.run()
         dialog.destroy()
         Gtk.main_quit()

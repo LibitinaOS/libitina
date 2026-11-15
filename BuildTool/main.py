@@ -44,6 +44,23 @@ def write(root, path, content, mode=None):
         target.chmod(mode)
 
 
+def install_libitina(root, output):
+    source = Path(__file__).resolve().parent.parent
+    root = root.resolve()
+    output = output.resolve()
+
+    def ignore(directory, names):
+        # Avoid copying build artifacts or recursing into a rootfs inside the repo.
+        return [name for name in names
+                if name in {'.git', '__pycache__'}
+                or Path(directory) / name == output
+                or Path(directory) / name == root
+                or Path(directory) / name in root.parents]
+
+    shutil.copytree(source, root / 'usr/share/libitina', symlinks=True,
+                    ignore=ignore, dirs_exist_ok=True)
+
+
 def bootstrap(root, args):
     # Resolve the source repository independently of the caller's working directory.
     source = Path(__file__).resolve().parent
@@ -58,6 +75,7 @@ def bootstrap(root, args):
     }
     run('debootstrap', '--arch=amd64', '--variant=minbase', args.release,
         root, args.mirror)
+    install_libitina(root, args.output)
     write(root, '/etc/libitina-info', json.dumps(metadata, indent=2) + '\n', 0o644)
     write(root, '/etc/hostname', args.hostname + '\n')
     write(root, '/etc/hosts', f'127.0.0.1 localhost\n127.0.1.1 {args.hostname}\n')
@@ -65,8 +83,8 @@ def bootstrap(root, args):
           f'deb {args.mirror} {args.release} main\n'
           f'deb {args.mirror} {args.release}-updates main\n'
           f'deb http://security.debian.org/debian-security {args.release}-security main\n')
-    write(root, '/etc/network/interfaces',
-          'auto lo\niface lo inet loopback\n\nauto enp1s0\nallow-hotplug enp1s0\niface enp1s0 inet dhcp\n')
+    # NetworkManager manages guest networking; do not configure ifupdown.
+
     write(root, '/etc/resolv.conf', 'nameserver 1.1.1.1\n')
     write(root, '/etc/fstab',
           'LABEL=DEBROOT / ext4 defaults 0 1\n'
@@ -106,7 +124,8 @@ def chroot_mounts(root):
 
 def install_guest(root, args, bootable):
     packages = ['systemd-sysv', 'dbus', 'ca-certificates', 'iproute2',
-                'ifupdown', 'isc-dhcp-client', 'sudo', 'openssh-server']
+                'network-manager', 'sudo', 'openssh-server', 'lightdm',
+                'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration']
     if bootable:
         packages += ['linux-image-amd64', 'grub-efi-amd64-bin',
                      'grub-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
@@ -114,7 +133,11 @@ def install_guest(root, args, bootable):
         run('chroot', root, 'apt-get', 'update')
         run('chroot', root, 'env', 'DEBIAN_FRONTEND=noninteractive',
             'apt-get', 'install', '-y', '--no-install-recommends', *packages)
-        run('chroot', root, 'systemctl', 'enable', 'ssh')
+        run('chroot', root, 'apt-get', 'purge', '-y', 'ifupdown')
+        run('chroot', root, 'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
+        configure_oobe(root)
+        run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
+        run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
         # Passwordless root is not enabled. Set a password via --root-password.
         if args.root_password:
             run('chroot', root, 'chpasswd', input=f'root:{args.root_password}\n')
@@ -130,6 +153,30 @@ def install_guest(root, args, bootable):
     (root / 'etc/systemd/system/multi-user.target.wants').mkdir(parents=True, exist_ok=True)
     link = root / 'etc/systemd/system/multi-user.target.wants/regenerate-ssh-keys.service'
     link.symlink_to('../regenerate-ssh-keys.service')
+
+
+def configure_oobe(root):
+    run('chroot', root, 'useradd', '--create-home', '--shell', '/bin/bash', 'defaultuser0')
+    # A locked password is accepted by Debian's dedicated lightdm-autologin PAM stack.
+    write(root, '/etc/lightdm/lightdm.conf.d/50-libitina.conf',
+          '[Seat:*]\ngreeter-session=lightdm-gtk-greeter\nuser-session=yuihirasawa\n')
+    write(root, '/etc/lightdm/lightdm.conf.d/90-libitina-oobe.conf',
+          '[Seat:*]\nautologin-user=defaultuser0\nautologin-user-timeout=0\n'
+          'autologin-session=libitina-oobe\n')
+    write(root, '/usr/share/wayland-sessions/libitina-oobe.desktop',
+          '[Desktop Entry]\nName=Libitina Setup\nType=Application\n'
+          'Exec=/bin/sh /usr/share/libitina/Setup/oobe-session.sh\n'
+          'DesktopNames=labwc;\n')
+    write(root, '/etc/sudoers.d/libitina-oobe',
+          'defaultuser0 ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block libitina-setup.service\n',
+          0o440)
+    write(root, '/etc/systemd/system/libitina-setup.service',
+          '[Unit]\nDescription=Apply Libitina first-boot setup\n'
+          'ConditionPathExists=!/var/lib/libitina/setup-complete\n'
+          '[Service]\nType=oneshot\n'
+          'ExecStart=/usr/bin/python3 /usr/share/libitina/Setup/provision.py\n'
+          'ExecStopPost=/usr/bin/systemctl --no-block start lightdm.service\n'
+          'TimeoutStartSec=180\n')
 
 
 def install_expand_service(root):
