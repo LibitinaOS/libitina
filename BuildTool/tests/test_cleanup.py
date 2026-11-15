@@ -58,7 +58,8 @@ class CleanupTests(unittest.TestCase):
             self.assertIn('/usr/sbin', environment['PATH'].split(':'))
 
     def test_all_unmounts_attempted_preserving_build_error(self):
-        with patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')) as run:
+        with patch.object(builder, 'mounts_under', return_value=[Path('/mounted')]), \
+                patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')) as run:
             with self.assertRaisesRegex(RuntimeError, 'original failure'):
                 try:
                     raise RuntimeError('original failure')
@@ -67,9 +68,22 @@ class CleanupTests(unittest.TestCase):
             self.assertEqual(run.call_count, 3)
 
     def test_unmount_failure_without_build_error_is_reported(self):
-        with patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')):
+        with patch.object(builder, 'mounts_under', return_value=[Path('/mounted')]), \
+                patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')):
             with self.assertRaises(subprocess.CalledProcessError):
                 builder.unmount_all(['dev'])
+
+    def test_already_unmounted_paths_are_skipped(self):
+        with patch.object(builder, 'mounts_under', side_effect=[[], [], [Path('/guest/dev')]]), \
+                patch.object(builder, 'run') as run:
+            builder.unmount_all(['/guest/sys', '/guest/proc', '/guest/dev'])
+            run.assert_called_once_with('umount', '-R', '/guest/dev')
+
+    def test_mountinfo_decodes_spaces_and_matches_only_subtree(self):
+        with patch.object(Path, 'read_text', return_value=(
+                '1 2 3 / /guest\\040root/dev rw - tmpfs tmpfs rw\n'
+                '4 2 3 / /guest\\040root-other rw - tmpfs tmpfs rw\n')):
+            self.assertEqual(builder.mounts_under('/guest root'), [Path('/guest root/dev')])
 
     def test_policy_restored_after_failure(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -85,7 +99,7 @@ class CleanupTests(unittest.TestCase):
 
     def test_mounted_directory_is_never_deleted(self):
         with tempfile.TemporaryDirectory() as outer:
-            temp = Path(outer) / 'build'
+            temp = Path(outer).resolve() / 'build'
             temp.mkdir()
             with patch.object(builder.tempfile, 'mkdtemp', return_value=str(temp)), \
                     patch.object(Path, 'read_text', return_value=f'1 2 3 / {temp}/root/dev rw - tmpfs tmpfs rw\n'), \
@@ -124,7 +138,9 @@ class CleanupTests(unittest.TestCase):
                 builder.check_build_storage(link)
 
     def test_dev_bind_is_made_slave_and_all_mounts_removed(self):
-        with tempfile.TemporaryDirectory() as temp, patch.object(builder, 'run') as run:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(builder, 'mounts_under', return_value=[Path('/mounted')]), \
+                patch.object(builder, 'run') as run:
             root = Path(temp)
             with builder.chroot_mounts(root):
                 pass

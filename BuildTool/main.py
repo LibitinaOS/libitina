@@ -151,11 +151,24 @@ def bootstrap(root, args):
     (root / 'boot/efi').mkdir(parents=True, exist_ok=True)
 
 
+def mounts_under(destination):
+    destination = Path(destination).resolve()
+    matches = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        path = Path(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4]))
+        if path == destination or destination in path.parents:
+            matches.append(path)
+    return matches
+
+
 def unmount_all(destinations):
     # Attempt every unmount and preserve the original build error during unwind.
     unwinding = sys.exc_info()[0] is not None
     first_error = None
     for destination in destinations:
+        # Debootstrap may have already removed mounts it found during stage two.
+        if not mounts_under(destination):
+            continue
         try:
             run('umount', '-R', destination)
         except subprocess.CalledProcessError as exc:
@@ -187,14 +200,10 @@ def build_directory(parent=None):
     try:
         yield temp
     finally:
-        mounted_paths = []
-        for line in Path('/proc/self/mountinfo').read_text().splitlines():
-            path = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4])
-            if Path(path) == temp or temp in Path(path).parents:
-                mounted_paths.append(path)
+        mounted_paths = mounts_under(temp)
         if mounted_paths:
             print(f'WARNING: preserving {temp}: filesystems remain mounted: '
-                  + ', '.join(mounted_paths), file=sys.stderr)
+                  + ', '.join(map(str, mounted_paths)), file=sys.stderr)
         else:
             shutil.rmtree(temp)
 
