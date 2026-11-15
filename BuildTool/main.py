@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build Debian rootfs ZIPs, expandable raw images, or sparse 20-GiB QCOW2 disks.
 
-Linux x86_64 host, root privileges, Debian amd64 guest, UEFI boot.
+Linux amd64/arm64 host, root privileges, Debian amd64/arm64 guest, UEFI boot.
+Cross builds require QEMU user emulation registered with binfmt_misc (F flag).
 Host requires: debootstrap, coreutils, mount, util-linux, parted, udev,
                e2fsprogs, dosfstools, qemu-utils (for qcow2), git, python3.
 Guest packages (including GRUB) are installed automatically.
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 import getpass
 import json
 import os
+import platform
 import re
 from pathlib import Path
 import shutil
@@ -25,6 +27,38 @@ import zipfile
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
+TARGETS = {
+    'amd64': {'grub': 'x86_64-efi', 'efi': 'BOOTX64.EFI', 'binfmt': 'qemu-x86_64'},
+    'arm64': {'grub': 'arm64-efi', 'efi': 'BOOTAA64.EFI', 'binfmt': 'qemu-aarch64'},
+}
+
+
+def cross_build(arch):
+    host = {'x86_64': 'amd64', 'amd64': 'amd64',
+            'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower())
+    if host is None:
+        raise RuntimeError(f'Unsupported build host architecture: {platform.machine()}')
+    return host != arch
+
+
+def require_cross_emulation(arch):
+    if not cross_build(arch):
+        return
+    registration = Path('/proc/sys/fs/binfmt_misc') / TARGETS[arch]['binfmt']
+    try:
+        status = registration.read_text()
+        enabled = (registration.parent / 'status').read_text().strip() == 'enabled'
+    except OSError:
+        status, enabled = '', False
+    flags = next((line.partition(':')[2].strip() for line in status.splitlines()
+                  if line.startswith('flags:')), '')
+    if not enabled or not status.startswith('enabled\n') or 'F' not in flags:
+        raise RuntimeError(
+            f'Cross-building {arch} requires an enabled {registration.name} binfmt handler '
+            'with the F flag for chroot execution. On Debian Trixie install '
+            'qemu-user and qemu-user-binfmt, then restart systemd-binfmt. '
+            'On older Debian releases use qemu-user-static and binfmt-support.')
+    print(f'Cross-building {arch} using {registration.name}', flush=True)
 
 
 def run(*args, capture=False, **kw):
@@ -76,6 +110,7 @@ def bootstrap(root, args):
     # Resolve the source repository independently of the caller's working directory.
     source = Path(__file__).resolve().parent
     metadata = {
+        'target_architecture': args.arch,
         'builder_username': os.environ.get('SUDO_USER') or getpass.getuser(),
         'builder_hostname': socket.gethostname(),
         'build_datetime': datetime.now(timezone.utc).isoformat(),
@@ -84,8 +119,19 @@ def bootstrap(root, args):
         'git_branch': run('git', '-C', source, 'rev-parse', '--abbrev-ref', 'HEAD',
                           capture=True).stdout.strip(),
     }
-    run('debootstrap', '--arch=amd64', '--variant=minbase', args.release,
-        root, args.mirror)
+    foreign = cross_build(args.arch)
+    options = ['--foreign'] if foreign else []
+    run('debootstrap', f'--arch={args.arch}', '--variant=minbase', *options,
+        args.release, root, args.mirror)
+    if foreign:
+        # F-flag binfmt emulates every guest executable, including children of
+        # maintainer scripts, without placing a host emulator in the image.
+        try:
+            run('chroot', root, '/bin/true')
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError('QEMU binfmt could not execute the target /bin/true') from exc
+        with chroot_mounts(root), inhibit_services(root):
+            run('chroot', root, '/debootstrap/debootstrap', '--second-stage')
     install_libitina(root, args.output)
     write(root, '/etc/libitina-info', json.dumps(metadata, indent=2) + '\n', 0o644)
     write(root, '/etc/hostname', args.hostname + '\n')
@@ -204,7 +250,7 @@ def install_guest(root, args, bootable):
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd']
     if bootable:
-        packages += ['linux-image-amd64', 'grub-efi-amd64-bin',
+        packages += [f'linux-image-{args.arch}', f'grub-efi-{args.arch}-bin',
                      'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
     with chroot_mounts(root), inhibit_services(root):
         run('chroot', root, 'apt-get', 'update')
@@ -332,6 +378,18 @@ def create_raw(path, size_gib, root_gib):
     run('parted', '-s', path, 'mkpart', 'home', 'ext4', f'{513 + root_gib * 1024}MiB', '100%')
 
 
+def install_bootloader(root, arch):
+    target = TARGETS[arch]
+    with chroot_mounts(root):
+        run('chroot', root, 'grub-install', f'--target={target["grub"]}',
+            '--efi-directory=/boot/efi', '--boot-directory=/boot',
+            '--removable', '--no-nvram')
+        run('chroot', root, 'update-grub')
+    fallback = root / 'boot/efi/EFI/BOOT' / target['efi']
+    if not fallback.is_file():
+        raise RuntimeError(f'GRUB did not produce the UEFI fallback loader: {fallback}')
+
+
 def build_disk(root, args, raw, expand):
     create_raw(raw, args.size, args.root_size)
     loop = run('losetup', '--find', '--show', '--partscan', raw, capture=True).stdout.strip()
@@ -351,12 +409,7 @@ def build_disk(root, args, raw, expand):
                     install_guest(root, args, True)
                     if expand:
                         install_expand_service(root)
-                    # Removable-media fallback bootloader: EFI/BOOT/BOOTX64.EFI.
-                    with chroot_mounts(root):
-                        run('chroot', root, 'grub-install', '--target=x86_64-efi',
-                            '--efi-directory=/boot/efi', '--boot-directory=/boot',
-                            '--removable', '--no-nvram')
-                        run('chroot', root, 'update-grub')
+                    install_bootloader(root, args.arch)
     finally:
         run('losetup', '-d', loop)
 
@@ -366,6 +419,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('format', choices=['zip', 'img', 'qcow2'])
     parser.add_argument('output', type=Path)
+    parser.add_argument('--arch', choices=TARGETS, default='amd64',
+                        help='guest architecture (default amd64); supports cross builds')
     parser.add_argument('--release', default='trixie')
     parser.add_argument('--mirror', default='http://deb.debian.org/debian')
     parser.add_argument('--hostname', default='debian')
@@ -401,6 +456,7 @@ def main():
         commands.append('qemu-img')
     for command in commands:
         require(command)
+    require_cross_emulation(args.arch)
     args.output = args.output.absolute()
     if args.output.exists():
         parser.error('output already exists; refusing to overwrite')

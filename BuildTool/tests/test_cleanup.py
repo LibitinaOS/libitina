@@ -20,7 +20,7 @@ class CleanupTests(unittest.TestCase):
                 patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
             root = Path(temp)
-            builder.install_guest(root, SimpleNamespace(root_password=None), False)
+            builder.install_guest(root, SimpleNamespace(root_password=None, arch='amd64'), False)
             installer_calls = [call.args for call in run.call_args_list
                                if '/usr/share/libitina/YuiHirasawa/install-debian.sh' in call.args]
             self.assertEqual(installer_calls, [(
@@ -34,7 +34,7 @@ class CleanupTests(unittest.TestCase):
                 patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
-            builder.install_guest(Path(temp), SimpleNamespace(root_password=None), True)
+            builder.install_guest(Path(temp), SimpleNamespace(root_password=None, arch='amd64'), True)
             calls = [call.args for call in run.call_args_list]
             installation = next(args for args in calls if 'install' in args and 'apt-get' in args)
             self.assertIn('grub2-common', installation)
