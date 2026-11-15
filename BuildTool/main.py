@@ -201,7 +201,11 @@ def install_guest(root, args, bootable):
         run('chroot', root, 'env', 'DEBIAN_FRONTEND=noninteractive',
             'apt-get', 'install', '-y', '--no-install-recommends', *packages)
         run('chroot', root, 'apt-get', 'purge', '-y', 'ifupdown')
-        run('chroot', root, 'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
+        # chroot changes the filesystem, not the inherited host environment.
+        run('chroot', root, 'env', '-i',
+            'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'HOME=/root',
+            'USER=root', 'LOGNAME=root', 'DEBIAN_FRONTEND=noninteractive',
+            'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
         run('chroot', root, 'apt-get', 'clean')
         configure_oobe(root)
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')

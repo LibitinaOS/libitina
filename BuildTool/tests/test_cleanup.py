@@ -1,7 +1,9 @@
+import contextlib
 import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,21 @@ spec.loader.exec_module(builder)
 
 
 class CleanupTests(unittest.TestCase):
+    def test_yui_installer_uses_clean_guest_environment(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
+            root = Path(temp)
+            builder.install_guest(root, SimpleNamespace(root_password=None), False)
+            installer_calls = [call.args for call in run.call_args_list
+                               if '/usr/share/libitina/YuiHirasawa/install-debian.sh' in call.args]
+            self.assertEqual(installer_calls, [(
+                'chroot', root, 'env', '-i', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
+                'HOME=/root', 'USER=root', 'LOGNAME=root',
+                'DEBIAN_FRONTEND=noninteractive', 'bash',
+                '/usr/share/libitina/YuiHirasawa/install-debian.sh')])
+
     def test_all_unmounts_attempted_preserving_build_error(self):
         with patch.object(builder, 'run', side_effect=subprocess.CalledProcessError(1, 'umount')) as run:
             with self.assertRaisesRegex(RuntimeError, 'original failure'):
