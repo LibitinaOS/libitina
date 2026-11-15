@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import getpass
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -94,6 +95,71 @@ def bootstrap(root, args):
     (root / 'boot/efi').mkdir(parents=True, exist_ok=True)
 
 
+def unmount_all(destinations):
+    # Attempt every unmount and preserve the original build error during unwind.
+    unwinding = sys.exc_info()[0] is not None
+    first_error = None
+    for destination in destinations:
+        try:
+            run('umount', '-R', destination)
+        except subprocess.CalledProcessError as exc:
+            print(f'WARNING: failed to unmount {destination}', file=sys.stderr)
+            first_error = first_error or exc
+    if first_error and not unwinding:
+        raise first_error
+
+
+def check_build_storage(path, force_tmp=False):
+    path = path.resolve()
+    if force_tmp:
+        return
+    tmp_root = Path('/tmp').resolve()
+    if path == tmp_root or tmp_root in path.parents:
+        raise RuntimeError(f'Refusing build storage under /tmp: {path}; '
+                           'choose --work-dir on disk or explicitly pass --force-tmp')
+    filesystem = run('findmnt', '--noheadings', '--output', 'FSTYPE',
+                     '--target', path, capture=True).stdout.strip()
+    if not filesystem or filesystem in {'tmpfs', 'ramfs'}:
+        raise RuntimeError(f'Refusing build storage on {filesystem or "unknown filesystem"}: '
+                           f'{path}; choose disk storage or explicitly pass --force-tmp')
+
+
+@contextlib.contextmanager
+def build_directory(parent=None):
+    # Never let shutil recursively delete a still-mounted guest (including /dev).
+    temp = Path(tempfile.mkdtemp(prefix='debian-builder-', dir=parent))
+    try:
+        yield temp
+    finally:
+        mounted_paths = []
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            path = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4])
+            if Path(path) == temp or temp in Path(path).parents:
+                mounted_paths.append(path)
+        if mounted_paths:
+            print(f'WARNING: preserving {temp}: filesystems remain mounted: '
+                  + ', '.join(mounted_paths), file=sys.stderr)
+        else:
+            shutil.rmtree(temp)
+
+
+@contextlib.contextmanager
+def inhibit_services(root):
+    policy = root / 'usr/sbin/policy-rc.d'
+    # Preserve a pre-existing policy, including its permissions or symlink.
+    backup = policy.with_name('policy-rc.d.libitina-backup')
+    existed = policy.exists() or policy.is_symlink()
+    if existed:
+        policy.rename(backup)
+    try:
+        write(root, '/usr/sbin/policy-rc.d', '#!/bin/sh\nexit 101\n', 0o755)
+        yield
+    finally:
+        policy.unlink(missing_ok=True)
+        if existed:
+            backup.rename(policy)
+
+
 @contextlib.contextmanager
 def mounted(source, destination, *options):
     destination.mkdir(parents=True, exist_ok=True)
@@ -101,7 +167,7 @@ def mounted(source, destination, *options):
     try:
         yield
     finally:
-        run('umount', '-R', destination)
+        unmount_all([destination])
 
 
 @contextlib.contextmanager
@@ -116,25 +182,27 @@ def chroot_mounts(root):
             dest.mkdir(exist_ok=True)
             run('mount', *opts, src, dest)
             mounts.append(dest)
+            if src == '/dev':
+                run('mount', '--make-rslave', dest)
         yield
     finally:
-        for dest in reversed(mounts):
-            run('umount', '-R', dest)
+        unmount_all(reversed(mounts))
 
 
 def install_guest(root, args, bootable):
     packages = ['systemd-sysv', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
-                'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration']
+                'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd']
     if bootable:
         packages += ['linux-image-amd64', 'grub-efi-amd64-bin',
                      'grub-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
-    with chroot_mounts(root):
+    with chroot_mounts(root), inhibit_services(root):
         run('chroot', root, 'apt-get', 'update')
         run('chroot', root, 'env', 'DEBIAN_FRONTEND=noninteractive',
             'apt-get', 'install', '-y', '--no-install-recommends', *packages)
         run('chroot', root, 'apt-get', 'purge', '-y', 'ifupdown')
         run('chroot', root, 'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
+        run('chroot', root, 'apt-get', 'clean')
         configure_oobe(root)
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
@@ -272,22 +340,32 @@ def main():
     parser.add_argument('--release', default='trixie')
     parser.add_argument('--mirror', default='http://deb.debian.org/debian')
     parser.add_argument('--hostname', default='debian')
-    parser.add_argument('--size', type=int, default=8,
-                        help='raw image size in GiB (default 8); qcow2 always 20')
-    parser.add_argument('--root-size', type=int, default=4,
-                        help='system partition size in GiB (default 4)')
+    parser.add_argument('--size', type=int, default=16,
+                        help='raw image size in GiB (default 16); qcow2 always 20')
+    parser.add_argument('--root-size', type=int, default=10,
+                        help='system partition size in GiB (default 10)')
     parser.add_argument('--root-password', default=None,
                         help='INSECURE: visible in process arguments; prefer offline setup')
+    parser.add_argument('--work-dir', type=Path,
+                        help='temporary build storage (default /var/tmp; ignores TMPDIR)')
+    parser.add_argument('--force-tmp', action='store_true',
+                        help='allow /tmp and RAM filesystems; default to TMPDIR when --work-dir is omitted')
+    parser.add_argument('--_mount-namespace', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error('must run as root on Linux')
     if sys.platform != 'linux':
         parser.error('Linux build host required')
+    if not args._mount_namespace:
+        require('unshare')
+        os.execvp('unshare', ['unshare', '--mount', '--propagation', 'private',
+                            sys.executable, str(Path(__file__).resolve()),
+                            *sys.argv[1:], '--_mount-namespace'])
     if args.format == 'qcow2':
         args.size = 20
     if args.size * 1024 <= 513 + args.root_size * 1024 + 512:
         parser.error('image too small: need ESP + root + at least 512 MiB for /home')
-    commands = ['debootstrap', 'chroot', 'mount', 'umount', 'git']
+    commands = ['debootstrap', 'chroot', 'mount', 'umount', 'git', 'findmnt']
     if args.format != 'zip':
         commands += ['parted', 'losetup', 'udevadm', 'mkfs.vfat', 'mkfs.ext4']
     if args.format == 'qcow2':
@@ -298,7 +376,13 @@ def main():
     if args.output.exists():
         parser.error('output already exists; refusing to overwrite')
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='debian-builder-') as temp:
+    work_dir = (args.work_dir if args.work_dir is not None else
+                Path(tempfile.gettempdir()) if args.force_tmp else Path('/var/tmp'))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    check_build_storage(work_dir, args.force_tmp)
+    check_build_storage(args.output.parent, args.force_tmp)
+    print(f'Build storage: {work_dir.resolve()}', flush=True)
+    with build_directory(work_dir) as temp:
         root = Path(temp) / 'root'
         root.mkdir()
         if args.format == 'zip':
