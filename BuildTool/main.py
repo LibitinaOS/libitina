@@ -432,7 +432,7 @@ def main():
                         help='guest architecture (default amd64); supports cross builds')
     parser.add_argument('--release', default='trixie')
     parser.add_argument('--mirror', default='http://deb.debian.org/debian')
-    parser.add_argument('--hostname', default='debian')
+    parser.add_argument('--hostname', default='FuckDavidBaszucki')
     parser.add_argument('--size', type=int, default=16,
                         help='raw image size in GiB (default 16); qcow2 always 20')
     parser.add_argument('--root-size', type=int, default=10,
