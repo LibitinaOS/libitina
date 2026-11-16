@@ -18,7 +18,8 @@ class CleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
-                patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'install_gtk_themes'), \
+                patch.object(builder, 'run') as run:
             root = Path(temp)
             builder.install_guest(root, SimpleNamespace(root_password=None, arch='amd64'), False)
             installer_calls = [call.args for call in run.call_args_list
@@ -33,7 +34,8 @@ class CleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
-                patch.object(builder, 'configure_oobe'), patch.object(builder, 'run') as run:
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'install_gtk_themes'), \
+                patch.object(builder, 'run') as run:
             builder.install_guest(Path(temp), SimpleNamespace(root_password=None, arch='amd64'), True)
             calls = [call.args for call in run.call_args_list]
             installation = next(args for args in calls if 'install' in args and 'apt-get' in args)

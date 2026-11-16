@@ -257,7 +257,8 @@ def chroot_mounts(root):
 def install_guest(root, args, bootable):
     packages = ['systemd-sysv', 'libpam-systemd', 'tzdata', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
-                'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd']
+                'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd',
+                'gsettings-desktop-schemas', 'libglib2.0-bin', 'dconf-gsettings-backend']
     if bootable:
         packages += [f'linux-image-{args.arch}', f'grub-efi-{args.arch}-bin',
                      'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
@@ -274,6 +275,7 @@ def install_guest(root, args, bootable):
             'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
         verify_guest_commands(root, bootable)
         run('chroot', root, 'apt-get', 'clean')
+        install_gtk_themes(root)
         configure_oobe(root)
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
@@ -305,6 +307,20 @@ def verify_guest_commands(root, bootable):
         'for command do command -v "$command" >/dev/null || '
         '{ echo "Missing guest command: $command" >&2; exit 1; }; done',
         'verify-guest-commands', *commands)
+
+
+def install_gtk_themes(root):
+    source = root / 'usr/share/libitina/Applications/Internal/Global/DeletescapeUiThemeInstall/themes'
+    for name in ('DeletescapeUi', 'DeletescapeUi-Dark'):
+        shutil.copytree(source / name, root / 'usr/share/themes' / name, dirs_exist_ok=True)
+    settings = ('[Settings]\ngtk-theme-name=DeletescapeUi\n'
+                'gtk-application-prefer-dark-theme=false\n')
+    # System fallback plus user defaults inherited by both OOBE and useradd.
+    write(root, '/etc/gtk-3.0/settings.ini', settings)
+    write(root, '/etc/skel/.config/gtk-3.0/settings.ini', settings)
+    write(root, '/usr/share/glib-2.0/schemas/99_libitina.gschema.override',
+          "[org.gnome.desktop.interface]\ngtk-theme='DeletescapeUi'\ncolor-scheme='default'\n")
+    run('chroot', root, 'glib-compile-schemas', '/usr/share/glib-2.0/schemas')
 
 
 def configure_oobe(root):

@@ -28,12 +28,33 @@ def validate(data):
         raise ValueError('Invalid password or full name')
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', data['hostname'], re.IGNORECASE):
         raise ValueError('Invalid hostname')
+    if data.get('appearance', 'light') not in ('light', 'dark'):
+        raise ValueError('Invalid appearance')
     if data['language'] not in LANGUAGES or data['keyboard'] not in KEYBOARDS:
         raise ValueError('Invalid locale or keyboard')
     zone = Path('/usr/share/zoneinfo') / data['timezone']
     if not zone.resolve().is_relative_to(Path('/usr/share/zoneinfo').resolve()) or not zone.is_file():
         raise ValueError('Invalid timezone')
     return data
+
+
+def apply_appearance(account, mode):
+    dark = mode == 'dark'
+    theme = 'DeletescapeUi-Dark' if dark else 'DeletescapeUi'
+    home = Path(account.pw_dir)
+    directory = home / '.config' / 'gtk-3.0'
+    directory.mkdir(parents=True, exist_ok=True)
+    settings = directory / 'settings.ini'
+    settings.write_text(f'[Settings]\ngtk-theme-name={theme}\n'
+                        f'gtk-application-prefer-dark-theme={str(dark).lower()}\n')
+    for path in (home / '.config', directory, settings):
+        os.chown(path, account.pw_uid, account.pw_gid)
+    # Write the user's GSettings database with their own session bus and HOME.
+    for key, value in (('gtk-theme', theme),
+                       ('color-scheme', 'prefer-dark' if dark else 'default')):
+        run('runuser', '-u', account.pw_name, '--', 'env', f'HOME={home}',
+            'dbus-run-session', '--', 'gsettings', 'set',
+            'org.gnome.desktop.interface', key, value)
 
 
 def main():
@@ -83,6 +104,7 @@ def main():
     session.write_text('[Desktop]\nSession=yuihirasawa\n')
     account = pwd.getpwnam(username)
     os.chown(session, account.pw_uid, account.pw_gid)
+    apply_appearance(account, data.get('appearance', 'light'))
     # Destroy the plaintext password export before removing the temporary home.
     EXPORT.unlink()
     run('userdel', '--remove', 'defaultuser0')

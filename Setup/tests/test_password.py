@@ -56,6 +56,17 @@ class PasswordTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
                 wizard.show_error.assert_not_called()
 
+    def test_appearance_previews_and_persists_both_modes(self):
+        wizard = self.wizard()
+        for mode, theme, dark in (('dark', 'DeletescapeUi-Dark', True),
+                                  ('light', 'DeletescapeUi', False)):
+            with self.subTest(mode=mode), patch.object(self.setup.Gtk, 'Settings', create=True) as settings:
+                wizard.update_appearance(Mock(get_active_id=Mock(return_value=mode)))
+                self.assertEqual(wizard.config['appearance'], mode)
+                settings.get_default.return_value.set_property.assert_any_call('gtk-theme-name', theme)
+                settings.get_default.return_value.set_property.assert_any_call(
+                    'gtk-application-prefer-dark-theme', dark)
+
     def test_invalid_password_does_not_replace_saved_password(self):
         for password, confirmation in (('short', 'short'), ('long enough', 'different')):
             with self.subTest(password=password):

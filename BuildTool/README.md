@@ -1,5 +1,9 @@
 # Building images
 
+Both bundled Deletescape UI GTK themes are installed globally in `/usr/share/themes`.
+The light `DeletescapeUi` theme is the default through GTK settings and GSettings.
+Skeleton home settings apply it to `defaultuser0` and accounts created by setup.
+
 Run on a Linux amd64 or arm64 host as root. The default target remains amd64.
 ZIP, raw IMG and QCOW2 outputs support `--arch amd64` and `--arch arm64`.
 

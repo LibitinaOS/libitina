@@ -29,11 +29,12 @@ class SetupWizard(Gtk.Window):
             'timezone': 'America/New_York', 'fullname': '',
             'username': '', 'password': '', 'hostname': '',
             'account_source': 'manual', 'github_username': '',
-            'profile_picture': None
+            'profile_picture': None, 'appearance': 'light'
         }
         self.pages = [self.page_welcome, self.page_language,
                       self.page_keyboard, self.page_timezone,
-                      self.page_account, self.page_user, self.page_computer, self.page_finish]
+                      self.page_account, self.page_user, self.page_computer,
+                      self.page_appearance, self.page_finish]
         self.loading_profile = False
         self.build_ui()
         self.show_page(0)
@@ -230,11 +231,27 @@ class SetupWizard(Gtk.Window):
         self.hostname_entry = Gtk.Entry(text=self.config['hostname'])
         self.add_field('Computer name', self.hostname_entry)
 
+    def page_appearance(self):
+        self.add_heading('Choose your appearance')
+        self.appearance_combo = self.create_combo(
+            [('Light', 'light'), ('Dark', 'dark')], self.config['appearance'])
+        self.add_field('Color mode', self.appearance_combo)
+        self.appearance_combo.connect('changed', self.update_appearance)
+        self.update_appearance(self.appearance_combo)
+
+    def update_appearance(self, combo):
+        mode = combo.get_active_id()
+        self.config['appearance'] = mode
+        settings = Gtk.Settings.get_default()
+        settings.set_property('gtk-theme-name',
+                              'DeletescapeUi-Dark' if mode == 'dark' else 'DeletescapeUi')
+        settings.set_property('gtk-application-prefer-dark-theme', mode == 'dark')
+
     def page_finish(self):
         self.add_heading('Ready to go')
         summary = ('Language: {language}\nKeyboard: {keyboard}\n'
                    'Timezone: {timezone}\nName: {fullname}\n'
-                   'Username: {username}\nComputer: {hostname}').format(**self.config)
+                   'Username: {username}\nComputer: {hostname}\nAppearance: {appearance}').format(**self.config)
         label = Gtk.Label(label=summary, xalign=0, yalign=0)
         label.set_selectable(True)
         self.content.pack_start(label, False, False, 0)
