@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 import tempfile
 import threading
 from urllib.error import URLError
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib, GdkPixbuf
+from gi.repository import Gtk, GLib, Gdk, GdkPixbuf
 
 
 class SetupWizard(Gtk.Window):
@@ -34,6 +35,20 @@ class SetupWizard(Gtk.Window):
         self.loading_profile = False
         self.build_ui()
         self.show_page(0)
+
+    def do_key_press_event(self, event):
+        modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        if event.keyval == Gdk.KEY_F10 and modifiers == Gdk.ModifierType.SHIFT_MASK:
+            try:
+                subprocess.Popen(['foot'], start_new_session=True)
+            except OSError as exc:
+                self.show_error(f'Could not open foot:\n{exc}')
+            return True
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and not modifiers:
+            if self.next_button.is_sensitive():
+                self.next_button.clicked()
+            return True
+        return Gtk.Window.do_key_press_event(self, event)
 
     def build_ui(self):
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -85,6 +100,12 @@ class SetupWizard(Gtk.Window):
 
     def page_welcome(self):
         self.add_heading('Welcome')
+        message = Gtk.Label(
+            label='Welcome to your new device running LibitinaOS! '
+                  'Let’s get everything set up and ready for you.',
+            xalign=0)
+        message.set_line_wrap(True)
+        self.content.pack_start(message, False, False, 0)
 
     def page_language(self):
         self.add_heading('Choose your language')
