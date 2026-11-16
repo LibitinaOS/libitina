@@ -24,6 +24,7 @@ class PasswordTests(unittest.TestCase):
             ButtonsType=SimpleNamespace(OK=1),
             InputPurpose=SimpleNamespace(PASSWORD=1))
         repository.GLib = Mock()
+        repository.Gdk = Mock()
         repository.GdkPixbuf = Mock()
         setup_dir = Path(__file__).resolve().parents[1]
         spec = importlib.util.spec_from_file_location('setup_password_test_module', setup_dir / 'main.py')

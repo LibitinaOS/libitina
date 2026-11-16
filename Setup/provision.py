@@ -26,7 +26,7 @@ def validate(data):
         raise ValueError('Invalid or reserved username')
     if len(data['password']) < 8 or ':' in data['fullname']:
         raise ValueError('Invalid password or full name')
-    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', data['hostname']):
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', data['hostname'], re.IGNORECASE):
         raise ValueError('Invalid hostname')
     if data['language'] not in LANGUAGES or data['keyboard'] not in KEYBOARDS:
         raise ValueError('Invalid locale or keyboard')

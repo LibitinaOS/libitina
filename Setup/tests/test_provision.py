@@ -17,6 +17,11 @@ class ValidationTests(unittest.TestCase):
         data = self.config()
         self.assertEqual(provision.validate(data)['password'], ' päss日本語 123 ')
 
+    def test_generated_hostname(self):
+        data = self.config()
+        data['hostname'] = 'Libitina-A7X2Q9'
+        self.assertEqual(provision.validate(data)['hostname'], 'Libitina-A7X2Q9')
+
     def test_invalid_exports(self):
         for field, values in {
             'username': ['root', 'defaultuser0', '-oops', 'a' * 33],

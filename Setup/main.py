@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import secrets
+import string
 import subprocess
 import tempfile
 import threading
@@ -289,8 +291,11 @@ class SetupWizard(Gtk.Window):
             # setup.json after successfully applying the configuration.
             self.config['password'] = password
         elif self.current_page == 6:
-            hostname = self.hostname_entry.get_text().strip().lower()
-            if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', hostname):
+            hostname = self.hostname_entry.get_text().strip()
+            if not hostname:
+                hostname = 'Libitina-' + ''.join(
+                    secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
+            if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', hostname, re.IGNORECASE):
                 self.show_error('Enter a valid hostname (1–63 characters).')
                 return False
             self.config['hostname'] = hostname
