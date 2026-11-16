@@ -318,7 +318,7 @@ def configure_oobe(root):
     write(root, '/usr/share/wayland-sessions/libitina-oobe.desktop',
           '[Desktop Entry]\nName=Libitina Setup\nType=Application\n'
           'Exec=/bin/sh /usr/share/libitina/Setup/oobe-session.sh\n'
-          'DesktopNames=labwc;\n')
+          'DesktopNames=labwc;\nX-LightDM-Session-Type=wayland\n')
     write(root, '/etc/sudoers.d/libitina-oobe',
           'defaultuser0 ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block libitina-setup.service\n',
           0o440)

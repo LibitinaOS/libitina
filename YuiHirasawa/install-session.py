@@ -3,6 +3,8 @@
 
 import argparse
 from pathlib import Path
+import re
+import shlex
 
 
 def quote_exec(value):
@@ -13,28 +15,46 @@ def quote_exec(value):
     return '"' + escaped.replace('\\', '\\\\').replace('%', '%%') + '"'
 
 
-def desktop_entry():
-    wrapper = Path(__file__).resolve().with_name("launcher.py")
+def desktop_entry(wrapper=Path('/usr/local/bin/yuihirasawa-session')):
+    # Debian Xsession does `exec $STARTUP`, not shell evaluation. Quotes around
+    # individual arguments survive as filename characters. Use one safe path.
+    if not wrapper.is_absolute() or not re.fullmatch(r'[A-Za-z0-9_./+-]+', str(wrapper)):
+        raise ValueError('Session wrapper path must be absolute with no spaces or shell metacharacters')
     return (
         "[Desktop Entry]\n"
         "Name=YuiHirasawa\n"
         "Comment=Yui shell on Labwc\n"
-        f"Exec=/usr/bin/python3 {quote_exec(str(wrapper))} --session\n"
+        f"Exec={wrapper}\n"
         "TryExec=labwc\n"
         "Type=Application\n"
+        "X-LightDM-Session-Type=wayland\n"
         "DesktopNames=labwc;\n"
     )
+
+
+def install(session_dir, bin_dir):
+    wrapper = bin_dir / 'yuihirasawa-session'
+    entry = desktop_entry(wrapper)
+    launcher = Path(__file__).resolve().with_name('launcher.py')
+    session_dir.mkdir(parents=True, exist_ok=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text('#!/bin/sh\nexec /usr/bin/python3 ' + shlex.quote(str(launcher))
+                       + ' --session\n', encoding='utf-8')
+    wrapper.chmod(0o755)
+    target = session_dir / 'yuihirasawa.desktop'
+    target.write_text(entry, encoding='utf-8')
+    target.chmod(0o644)
+    return target
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session-dir", type=Path, default=Path("/usr/share/wayland-sessions"),
                         help="login manager's Wayland session directory")
+    parser.add_argument('--bin-dir', type=Path, default=Path('/usr/local/bin'),
+                        help='system session wrapper directory (absolute, no spaces)')
     args = parser.parse_args()
-    args.session_dir.mkdir(parents=True, exist_ok=True)
-    target = args.session_dir / "yuihirasawa.desktop"
-    target.write_text(desktop_entry(), encoding="utf-8")
-    target.chmod(0o644)
+    target = install(args.session_dir, args.bin_dir)
     print(f"Installed {target}. Select YuiHirasawa at login.")
     return 0
 

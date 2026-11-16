@@ -31,6 +31,17 @@ login manager supporting `/usr/share/wayland-sessions`, a session D-Bus,
 `XDG_RUNTIME_DIR`, and the desired hardware/audio services are configured.
 On systems without systemd-journald, Yui logs to its inherited stdout/stderr.
 
+The desktop entry executes `/usr/local/bin/yuihirasawa-session` without arguments.
+This wrapper preserves checkout-path quoting across Debian Xsession, which otherwise
+passes quoted Python script arguments as literal filename characters.
+The login launcher explicitly selects a Wayland session for LightDM, clears inherited
+greeter display addresses before starting Labwc, and starts a session D-Bus when
+none is provided. GTK shell clients select the Wayland backend even if Raspberry
+Pi OS or an X11 greeter exported `GDK_BACKEND=x11`. After updating an existing
+checkout, rerun `sudo /usr/bin/python3 YuiHirasawa/install-session.py` from the
+repository root to refresh the registered session, then log out and back in.
+Built images register the updated entry automatically.
+
 The desktop taskbar and mobile status bar refresh their network, Bluetooth,
 volume, and battery icons every three seconds. Icons show Wi-Fi signal strength
 or wired/disconnected state, audio level/mute, and battery level/charging.
@@ -185,11 +196,11 @@ to a logical-resolution pixbuf. On Debian, install the bridge with
 
 The launcher routes its own logs and inherited stdout/stderr from the shell,
 notification daemon, display worker, and session compositor to the systemd
-journal using `systemd-cat`. Read or follow them with `journalctl -t yui -b`
+journal through inherited journal stream descriptors. Read or follow them with `journalctl -t yui -b`
 or `journalctl -t yui -b -f`. Stdout uses info priority; stderr uses error priority.
 Python children run unbuffered so output arrives promptly. The journal connection
-is inherited across worker restarts. If `systemd-cat` or the journal socket is
-unavailable, output stays on the original stdout/stderr. Restart the session to
+is inherited across worker restarts. If the journal cannot be connected, output stays on the original stdout/stderr
+and session startup continues. Logging never replaces the session process. Restart the session to
 apply this change. Programs that redirect their own output or use D-Bus activation
 manage their logs separately.
 

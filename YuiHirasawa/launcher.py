@@ -6,7 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 import signal
-import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -18,27 +18,59 @@ ROOT = Path(__file__).resolve().parent
 RESTART_DELAY = 1.0
 
 
-def connect_journal():
-    """Re-exec through systemd-cat so all descendants inherit journal streams."""
-    if os.environ.get("YUI_JOURNAL_CONNECTED") == "1":
-        return
-    journal_cat = shutil.which("systemd-cat")
-    if journal_cat is None or not Path("/run/systemd/journal/stdout").is_socket():
-        print("Yui: journal unavailable; keeping stdout/stderr", file=sys.stderr, flush=True)
-        return
-    environment = os.environ.copy()
-    environment["YUI_JOURNAL_CONNECTED"] = "1"
-    environment["PYTHONUNBUFFERED"] = "1"
-    command = [journal_cat, "--identifier=yui", "--priority=info",
-               "--stderr-priority=err", "--level-prefix=no", "--",
-               sys.executable, "-u", str(Path(__file__).resolve()), *sys.argv[1:]]
+def journal_stream(priority):
+    stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
+        stream.connect('/run/systemd/journal/stdout')
+        # journald's stdout stream protocol: identifier, unit, priority,
+        # level-prefix, forward-to-syslog, forward-to-kmsg, forward-to-console.
+        stream.sendall(f'yui\n\n{priority}\n0\n0\n0\n0\n'.encode())
+        return stream
+    except OSError:
+        stream.close()
+        raise
+
+
+def connect_journal():
+    """Attach streams without replacing the session with a fallible logger."""
+    if os.environ.get('YUI_JOURNAL_CONNECTED') == '1':
+        return
+    streams, saved = [], []
+    try:
+        # Connect both before changing either descriptor. Logging is optional.
+        streams.append(journal_stream(6))
+        streams.append(journal_stream(3))
         sys.stdout.flush()
         sys.stderr.flush()
-        os.execve(journal_cat, command, environment)
+        saved.append(os.dup(1))
+        saved.append(os.dup(2))
+        os.dup2(streams[0].fileno(), 1)
+        os.dup2(streams[1].fileno(), 2)
     except OSError as exc:
-        print(f"Yui: could not connect to journal: {exc}; keeping stdout/stderr",
+        for descriptor, original in zip((1, 2), saved):
+            os.dup2(original, descriptor)
+        print(f'Yui: journal unavailable ({exc}); keeping stdout/stderr',
               file=sys.stderr, flush=True)
+    else:
+        os.environ['YUI_JOURNAL_CONNECTED'] = '1'
+        os.environ['PYTHONUNBUFFERED'] = '1'
+    finally:
+        for stream in streams:
+            stream.close()
+        for descriptor in saved:
+            os.close(descriptor)
+
+
+def prepare_clients():
+    # Pi OS and X11 greeters can export GDK_BACKEND=x11. Layer-shell clients
+    # must connect to the compositor which launched this supervisor.
+    if os.environ.get('WAYLAND_DISPLAY'):
+        os.environ['GDK_BACKEND'] = 'wayland'
+        os.environ['XDG_SESSION_TYPE'] = 'wayland'
+    if not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
+        command = ['dbus-run-session', '--', sys.executable,
+                   str(Path(__file__).resolve()), *sys.argv[1:]]
+        os.execvp(command[0], command)
 
 
 def terminate_group(child, sig=signal.SIGKILL):
@@ -117,6 +149,7 @@ def main():
     if args.session:
         from labwc_session import main as run_session
         return run_session()
+    prepare_clients()
     if args.worker:
         commands = {name: [sys.executable, str(ROOT / name)]
                     for name in ("notification.py", "main.py", "displays.py")}

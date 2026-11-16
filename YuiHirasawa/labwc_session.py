@@ -51,6 +51,13 @@ def overlay_xml(config_dirs):
 
 def main():
     environment = os.environ.copy()
+    # A login compositor must acquire the seat, rather than accidentally nesting
+    # inside LightDM's X11 greeter via an inherited DISPLAY.
+    environment.pop('DISPLAY', None)
+    environment.pop('WAYLAND_DISPLAY', None)
+    environment['XDG_SESSION_TYPE'] = 'wayland'
+    environment['XDG_CURRENT_DESKTOP'] = 'labwc'
+    environment['GDK_BACKEND'] = 'wayland'
     system_dirs = environment.get("XDG_CONFIG_DIRS") or "/etc/xdg"
     user_dir = Path(environment.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     config_dirs = [user_dir, *(Path(p) for p in system_dirs.split(":") if p)]
@@ -69,6 +76,8 @@ def main():
                 mobile_path = Path(temporary) / "mobile-rc.xml"
                 mobile_path.write_bytes(mobile_xml(config_dirs, xml))
                 command.extend(["--config", str(mobile_path)])
+            if not environment.get('DBUS_SESSION_BUS_ADDRESS'):
+                command = ['dbus-run-session', '--', *command]
             return subprocess.run(command,
                                   env=environment).returncode
     except (OSError, ET.ParseError) as exc:

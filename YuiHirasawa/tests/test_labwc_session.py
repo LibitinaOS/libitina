@@ -13,7 +13,7 @@ import labwc_session
 
 
 class SessionTests(unittest.TestCase):
-    def check_session(self, shell):
+    def check_session(self, shell, bus=""):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             user = base / "user"
@@ -43,10 +43,19 @@ class SessionTests(unittest.TestCase):
                     self.assertEqual(rules[-1].find("action").get("name"), "Maximize")
                 else:
                     self.assertNotIn("--config", command)
+                self.assertNotIn('DISPLAY', env)
+                self.assertNotIn('WAYLAND_DISPLAY', env)
+                self.assertEqual(env['XDG_SESSION_TYPE'], 'wayland')
+                self.assertEqual(env['GDK_BACKEND'], 'wayland')
+                if bus:
+                    self.assertEqual(command[0], 'labwc')
+                    self.assertEqual(env['DBUS_SESSION_BUS_ADDRESS'], bus)
+                else:
+                    self.assertEqual(command[:2], ['dbus-run-session', '--'])
                 self.assertEqual(source.read_bytes(), original)
                 return type("Result", (), {"returncode": 0})()
 
-            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(user), "XDG_CONFIG_DIRS": str(system)}), patch.object(labwc_session, "load_config", return_value={"shell": shell}), patch.object(labwc_session.subprocess, "run", side_effect=run):
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(user), "XDG_CONFIG_DIRS": str(system), "DISPLAY": ":0", "WAYLAND_DISPLAY": "greeter", "GDK_BACKEND": "x11", "DBUS_SESSION_BUS_ADDRESS": bus}), patch.object(labwc_session, "load_config", return_value={"shell": shell}), patch.object(labwc_session.subprocess, "run", side_effect=run):
                 self.assertEqual(labwc_session.main(), 0)
             self.assertEqual(source.read_bytes(), original)
             self.assertTrue(all(not path.exists() for path in paths))
@@ -56,6 +65,9 @@ class SessionTests(unittest.TestCase):
 
     def test_desktop_keeps_existing_config_selection(self):
         self.check_session("desktop")
+
+    def test_existing_session_bus_is_preserved(self):
+        self.check_session('desktop', bus='unix:path=/run/user/1000/bus')
 
     def test_mobile_without_existing_config(self):
         with tempfile.TemporaryDirectory() as temporary:
