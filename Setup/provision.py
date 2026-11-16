@@ -17,13 +17,15 @@ KEYBOARDS = {'us', 'gb', 'es', 'fr', 'de', 'it', 'jp'}
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
-
+# todo: the main OOBE program should sanity check each step, make sure it does
 def validate(data):
     for key in ('username', 'password', 'fullname', 'hostname', 'language', 'keyboard', 'timezone'):
         if not isinstance(data.get(key), str) or any(c in data[key] for c in '\x00\n\r'):
             raise ValueError(f'Invalid {key}')
+    # todo: make sure that other system accounts are here too
     if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', data['username']) or data['username'] in {'root', 'defaultuser0'}:
         raise ValueError('Invalid or reserved username')
+    # todo: these should not be the same check, what does the password have to do with the full name?
     if len(data['password']) < 8 or ':' in data['fullname']:
         raise ValueError('Invalid password or full name')
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', data['hostname'], re.IGNORECASE):
