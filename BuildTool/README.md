@@ -1,5 +1,11 @@
 # Building images
 
+BuildTool runs DeNura inside the guest to rebrand its OS release as LibitinaOS.
+It also runs `Applications/install.py --system`, installing all complete bundled
+applications under `/usr/share/libitina/applications` with desktop entries in
+`/usr/share/applications`, available to every user. Application selection and
+shared backend files follow the application's existing installer.
+
 Both bundled Deletescape UI GTK themes are installed globally in `/usr/share/themes`.
 The light `DeletescapeUi` theme is the default through GTK settings and GSettings.
 Skeleton home settings apply it to `defaultuser0` and accounts created by setup.

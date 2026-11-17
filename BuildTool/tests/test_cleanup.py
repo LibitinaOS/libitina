@@ -14,6 +14,28 @@ spec.loader.exec_module(builder)
 
 
 class CleanupTests(unittest.TestCase):
+    def test_applications_and_rebranding_run_in_guest_after_yui_installation(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'install_gtk_themes'), \
+                patch.object(builder, 'run') as run:
+            root = Path(temp)
+            builder.install_guest(root, SimpleNamespace(root_password=None, arch='amd64'), False)
+            calls = [call.args for call in run.call_args_list]
+            apps = ('chroot', root, '/usr/bin/python3',
+                    '/usr/share/libitina/Applications/install.py', '--system')
+            branding = ('chroot', root, '/usr/bin/python3',
+                        '/usr/share/libitina/DeNura/main.py')
+            self.assertEqual(calls.count(apps), 1)
+            self.assertEqual(calls.count(branding), 1)
+            yui = next(i for i, args in enumerate(calls)
+                       if '/usr/share/libitina/YuiHirasawa/install-debian.sh' in args)
+            self.assertLess(yui, calls.index(apps))
+            self.assertLess(calls.index(apps), calls.index(branding))
+            packages = next(args for args in calls if 'apt-get' in args and 'install' in args)
+            self.assertIn('desktop-file-utils', packages)
+
     def test_yui_installer_uses_clean_guest_environment(self):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \

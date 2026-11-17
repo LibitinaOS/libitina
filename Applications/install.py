@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Libitina applications for the current user."""
+"""Install Libitina applications for the current user or system-wide."""
 
 from __future__ import annotations
 
@@ -129,10 +129,11 @@ def make_desktop_entry(template: str, app_directory: Path) -> str:
 
 
 def replace_directory(
-    source: Path, destination: Path, shared_files: tuple[Path, ...] = ()
+    source: Path, destination: Path, shared_files: tuple[Path, ...] = (),
+    *, directory_mode: int = 0o700,
 ) -> None:
     """Copy *source* into place without exposing a partially copied tree."""
-    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destination.parent.mkdir(mode=directory_mode, parents=True, exist_ok=True)
     staging_root = Path(tempfile.mkdtemp(prefix=".libitina-install-", dir=destination.parent))
     staged = staging_root / destination.name
     backup = staging_root / "previous"
@@ -159,9 +160,9 @@ def replace_directory(
         shutil.rmtree(staging_root, ignore_errors=True)
 
 
-def write_desktop_entry(path: Path, contents: str) -> None:
-    """Atomically write a user desktop entry."""
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+def write_desktop_entry(path: Path, contents: str, *, directory_mode: int = 0o700) -> None:
+    """Atomically write a desktop entry."""
+    path.parent.mkdir(mode=directory_mode, parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -184,7 +185,7 @@ def write_desktop_entry(path: Path, contents: str) -> None:
 
 
 def refresh_applications(application_directory: Path) -> bool:
-    """Refresh the user's desktop application database when supported."""
+    """Refresh the desktop application database when supported."""
     updater = shutil.which("update-desktop-database")
     if updater is None:
         print(
@@ -214,7 +215,7 @@ def refresh_applications(application_directory: Path) -> bool:
     return True
 
 
-def install(application: Application, user_data: Path) -> tuple[Path, Path]:
+def install(application: Application, user_data: Path, *, system: bool = False) -> tuple[Path, Path]:
     """Install one application payload and its generated desktop entry."""
     install_directory = user_data / "libitina" / "applications" / application.app_id
     desktop_path = user_data / "applications" / f"libitina-{application.app_id}.desktop"
@@ -225,13 +226,20 @@ def install(application: Application, user_data: Path) -> tuple[Path, Path]:
         repository / filename
         for filename in SHARED_FILES.get(application.app_id, ())
     )
-    replace_directory(application.source, install_directory, shared_files)
-    write_desktop_entry(desktop_path, desktop_entry)
+    directory_mode = 0o755 if system else 0o700
+    replace_directory(application.source, install_directory, shared_files,
+                      directory_mode=directory_mode)
+    write_desktop_entry(desktop_path, desktop_entry, directory_mode=directory_mode)
     return install_directory, desktop_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--system",
+        action="store_true",
+        help="install for all users under /usr/share (requires root)",
+    )
     parser.add_argument(
         "--kind",
         action="append",
@@ -254,6 +262,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.system and not args.dry_run and os.geteuid() != 0:
+        print("install: --system requires root", file=sys.stderr)
+        return 1
     root = Path(__file__).resolve().parent
     kinds = set(args.kind or KINDS)
     environments = set(args.environment or ENVIRONMENTS)
@@ -272,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         ]
         print(f"Skipping {candidate.relative_to(root)} (missing {', '.join(missing)})")
 
-    user_data = data_home().resolve()
+    user_data = Path("/usr/share") if args.system else data_home().resolve()
     installed_count = 0
     for application in applications:
         install_directory = (
@@ -288,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             continue
         try:
-            install(application, user_data)
+            install(application, user_data, system=args.system)
         except (OSError, UnicodeError, ValueError) as exc:
             print(f"install: could not install {application.app_id}: {exc}", file=sys.stderr)
             return 1

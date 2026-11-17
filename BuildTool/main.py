@@ -258,7 +258,8 @@ def install_guest(root, args, bootable):
     packages = ['systemd-sysv', 'libpam-systemd', 'tzdata', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd',
-                'gsettings-desktop-schemas', 'libglib2.0-bin', 'dconf-gsettings-backend']
+                'gsettings-desktop-schemas', 'libglib2.0-bin', 'dconf-gsettings-backend',
+                'desktop-file-utils']
     if bootable:
         packages += [f'linux-image-{args.arch}', f'grub-efi-{args.arch}-bin',
                      'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
@@ -276,12 +277,16 @@ def install_guest(root, args, bootable):
         verify_guest_commands(root, bootable)
         run('chroot', root, 'apt-get', 'clean')
         install_gtk_themes(root)
+        run('chroot', root, '/usr/bin/python3',
+            '/usr/share/libitina/Applications/install.py', '--system')
         configure_oobe(root)
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
         # Passwordless root is not enabled. Set a password via --root-password.
         if args.root_password:
             run('chroot', root, 'chpasswd', input=f'root:{args.root_password}\n')
+        # Rebrand only after installers that inspect the base distribution finish.
+        run('chroot', root, '/usr/bin/python3', '/usr/share/libitina/DeNura/main.py')
     # Avoid shipping identical machine IDs and SSH host keys across images.
     write(root, '/etc/machine-id', '')
     for key in (root / 'etc/ssh').glob('ssh_host_*'):

@@ -26,5 +26,10 @@ update applications for the current user. To install only Yui applications, use
 `YuiHirasawa/displays.py` and `YuiHirasawa/settings.py` with YuiSettings so its installed desktop entry works
 without the repository on Python's module search path. Rerun the installer after
 updating the shared backend.
+For a system-wide installation, run `sudo python3 Applications/install.py --system`.
+This installs payloads in `/usr/share/libitina/applications` and desktop entries
+in `/usr/share/applications`, ignoring the current user's XDG data directory.
+The same kind/environment filters and `--dry-run` option apply. BuildTool uses
+this mode inside the guest image automatically.
 See [YuiSettings/README.md](Production/Yui/YuiSettings/README.md) for its Linux
 service dependencies and available settings.
