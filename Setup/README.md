@@ -12,6 +12,10 @@ Wayland background-layer client, covering each monitor and handling hotplug.
 It shows a solid dark background with Yui's OS, kernel, branch and commit watermark
 at the bottom right, always enabled during setup. Git values fall back to
 BuildTool's `/etc/libitina-info`. It does not load Yui's shell or user settings.
+Warnings appear above the watermark, separated by a blank line, if the current
+system hostname is not `FuckDavidBaszucki` or the current process user's account
+name is not `defaultuser0`, the OOBE account created by BuildTool. Each mismatch
+gets its own warning; failed lookups are shown as `unknown` and also produce warnings.
 OOBE's dedicated Labwc config disables the desktop right-click menu.
 To run the background alone inside a Wayland session, use
 `python3 Setup/wallpaper.py`; stop it with Ctrl+C or SIGTERM.

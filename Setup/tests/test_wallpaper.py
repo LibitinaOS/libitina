@@ -1,12 +1,13 @@
 """Check OOBE backgrounds and session cleanup without a Wayland compositor."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
@@ -29,6 +30,43 @@ def background_module():
 
 
 class BackgroundTests(unittest.TestCase):
+    def test_current_identity_warnings_precede_watermark_with_blank_line(self):
+        module = background_module()
+        for hostname, username, warnings in (
+                ('FuckDavidBaszucki', 'defaultuser0', []),
+                ('other-host', 'defaultuser0', [
+                    'Warning: Hostname is other-host (expected FuckDavidBaszucki).']),
+                ('FuckDavidBaszucki', 'other-user', [
+                    'Warning: Username is other-user (expected defaultuser0).']),
+                ('other-host', 'other-user', [
+                    'Warning: Hostname is other-host (expected FuckDavidBaszucki).',
+                    'Warning: Username is other-user (expected defaultuser0).']),
+                ('FuckDavidBaszucki', 'dapixelprowler', [
+                    'Warning: Username is dapixelprowler (expected defaultuser0).'])):
+            with self.subTest(hostname=hostname, username=username), \
+                    patch.object(module.socket, 'gethostname', return_value=hostname), \
+                    patch.object(module.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name=username)), \
+                    patch.object(module.Path, 'read_text', return_value=json.dumps({
+                        'builder_hostname': 'unrelated-host', 'builder_username': 'unrelated-user'})), \
+                    patch.object(module.subprocess, 'check_output', side_effect=['branch', 'commit']), \
+                    patch.object(module.platform, 'freedesktop_os_release',
+                                 return_value={'PRETTY_NAME': 'Test OS'}), \
+                    patch.object(module.platform, 'release', return_value='kernel'):
+                watermark = 'Test OS\nkernel\nb=branch c=commit\nI <3 Jamie Paige'
+                expected = '\n'.join(warnings) + '\n\n' + watermark if warnings else watermark
+                self.assertEqual(module.internal_watermark_text(), expected)
+
+    def test_failed_current_identity_lookups_show_unknown(self):
+        module = background_module()
+        with patch.object(module.socket, 'gethostname', side_effect=OSError()), \
+                patch.object(module.pwd, 'getpwuid', side_effect=KeyError()), \
+                patch.object(module.Path, 'read_text', return_value='{}'), \
+                patch.object(module.subprocess, 'check_output', side_effect=['branch', 'commit']):
+            text = module.internal_watermark_text()
+        self.assertTrue(text.startswith(
+            'Warning: Hostname is unknown (expected FuckDavidBaszucki).\n'
+            'Warning: Username is unknown (expected defaultuser0).\n\n'))
+
     def test_background_surfaces_hotplug_and_cleanup(self):
         module = background_module()
         display = module.Gdk.Display.get_default.return_value

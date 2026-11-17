@@ -2,9 +2,12 @@
 """Standalone Wayland background and build watermark for the OOBE session."""
 
 import json
+import os
 from pathlib import Path
 import platform
+import pwd
 import signal
+import socket
 import subprocess
 
 import gi
@@ -16,6 +19,33 @@ from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 def internal_watermark_text():
     """Match Yui's watermark without loading the shell or its user settings."""
+    try:
+        metadata = json.loads(Path('/etc/libitina-info').read_text())
+    except (OSError, ValueError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    def stored_value(key):
+        value = metadata.get(key)
+        return value.strip() if isinstance(value, str) and value.strip() else 'unknown'
+
+    try:
+        hostname = socket.gethostname()
+    except OSError:
+        hostname = 'unknown'
+    try:
+        username = pwd.getpwuid(os.getuid()).pw_name
+    except (KeyError, OSError):
+        username = 'unknown'
+
+    warnings = []
+    for actual, label, expected in (
+            (hostname, 'Hostname', 'FuckDavidBaszucki'),
+            (username, 'Username', 'defaultuser0')):
+        if actual != expected:
+            warnings.append(f'Warning: {label} is {actual} (expected {expected}).')
+
     try:
         pretty_name = platform.freedesktop_os_release().get('PRETTY_NAME', 'Linux')
     except OSError:
@@ -33,20 +63,12 @@ def internal_watermark_text():
     branch = git_value('rev-parse', '--abbrev-ref', 'HEAD')
     commit = git_value('rev-parse', 'HEAD')
     if branch is None or commit is None:
-        try:
-            metadata = json.loads(Path('/etc/libitina-info').read_text())
-        except (OSError, ValueError):
-            metadata = {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        def stored_value(key):
-            value = metadata.get(key)
-            return value.strip() if isinstance(value, str) and value.strip() else 'unknown'
-
         branch = branch or stored_value('git_branch')
         commit = commit or stored_value('git_commit')
-    return f'{pretty_name}\n{platform.release()}\nb={branch} c={commit}\nI <3 Jamie Paige'
+    watermark = f'{pretty_name}\n{platform.release()}\nb={branch} c={commit}\nI <3 Jamie Paige'
+    if warnings:
+        return '\n'.join(warnings) + '\n\n' + watermark
+    return watermark
 
 
 class SetupBackground:
