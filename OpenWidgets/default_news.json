@@ -23,7 +23,7 @@
         "id": "maia_blog",
         "name": "maia :3",
         "tagline": "Personal blog of a hacktivist.",
-        "url": "http://localhost:8080/feed?url=https://maia.crimew.gay/feed.xml",
+        "url": "https://maia.crimew.gay/feed.xml",
         "channels": ["Hacking", "Tech"],
         "max_stories": 0,
         "priority": 6.5,
