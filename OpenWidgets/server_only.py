@@ -4,9 +4,7 @@ import socket
 import subprocess
 import threading
 from flask import Flask, render_template_string, request, send_file
-import io
 import time
-import asyncio
 import platform
 import getpass
 
@@ -19,15 +17,7 @@ from widget_system import (
     widgets_settings_payload,
 )
 
-from PySide6.QtCore import Qt, QUrl, QSize, QEvent, QTimer, Signal, Slot, QMetaObject, Q_ARG
-from PySide6.QtWidgets import QApplication, QWidget
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtGui import QColor
 import ctypes
-if sys.platform == "win32":
-    from ctypes import wintypes
-    import comtypes
-    from comtypes import GUID
 import urllib.request
 import urllib.error
 import ssl
@@ -36,9 +26,7 @@ import re
 import json
 import html
 import webbrowser
-import shutil
 from urllib.parse import urlparse
-from PySide6.QtWebEngineCore import QWebEngineSettings
 
 from pixelnews_transparency_report import pixelnews_transparency_html
 
@@ -79,19 +67,6 @@ class _LightspeedRedirectGuard(urllib.request.HTTPRedirectHandler):
 def _urlopen_guarding_lightspeed(url: str, *, context: ssl.SSLContext | None, timeout: float):
     return _urlopen_with_proxy_setting(url, timeout=timeout, context=context, guard_lightspeed=True)
 
-_WEBVIEW_REMOTE_DEBUG = os.environ.get("WEBVIEW_REMOTE_DEBUG", "1").strip().lower() in ("1", "true", "yes", "on")
-try:
-    _WEBVIEW_REMOTE_DEBUG_PORT = int(os.environ.get("WEBVIEW_REMOTE_DEBUG_PORT", "9222"))
-except Exception:
-    _WEBVIEW_REMOTE_DEBUG_PORT = 9222
-
-if _WEBVIEW_REMOTE_DEBUG:
-    # Prefer Chromium flags; also set QTWEBENGINE_REMOTE_DEBUGGING for compatibility.
-    existing_flags = (os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS") or "").strip()
-    if "--remote-debugging-port=" not in existing_flags:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (existing_flags + f" --remote-debugging-port={_WEBVIEW_REMOTE_DEBUG_PORT}").strip()
-    os.environ.setdefault("QTWEBENGINE_REMOTE_DEBUGGING", str(_WEBVIEW_REMOTE_DEBUG_PORT))
-
 # Ensure the local `nws_ez` package (in ./nws-ez) is importable without installing.
 _WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 _NWS_EZ_DIR = os.path.join(_WORKSPACE_DIR, "nws-ez")
@@ -100,94 +75,6 @@ if _NWS_EZ_DIR not in sys.path:
 
 _FALLBACK_BG_PATH = os.path.join(_WORKSPACE_DIR, "static", "fallbackbg.png")
 
-
-def _ensure_fallback_bg_exists() -> None:
-    """Ensure /static/fallbackbg.png exists.
-
-    We keep this lightweight by copying an existing shipped image if present.
-    """
-    try:
-        if os.path.exists(_FALLBACK_BG_PATH):
-            return
-        src = os.path.join(_WORKSPACE_DIR, "static", "downside.png")
-        if os.path.exists(src):
-            os.makedirs(os.path.dirname(_FALLBACK_BG_PATH), exist_ok=True)
-            shutil.copyfile(src, _FALLBACK_BG_PATH)
-    except Exception:
-        # Best-effort; if missing, the UI will still work (just no fallback image).
-        pass
-
-
-_ensure_fallback_bg_exists()
-
-
-DWMWA_SYSTEMBACKDROP_TYPE = 38
-DWMSBT_MICA = 2
-
-dwmapi = ctypes.WinDLL("dwmapi") if sys.platform == "win32" else None
-
-def enable_mica(hwnd):
-    if dwmapi is None:
-        return
-    value = ctypes.c_int(DWMSBT_MICA)
-    dwmapi.DwmSetWindowAttribute(
-        wintypes.HWND(hwnd),
-        ctypes.c_int(DWMWA_SYSTEMBACKDROP_TYPE),
-        ctypes.byref(value),
-        ctypes.sizeof(value)
-    )
-
-if sys.platform == "win32":
-    CLSID_VirtualDesktopManager = GUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}")
-    IID_IVirtualDesktopManager = GUID("{A5CD92FF-29BE-454C-8D04-D82879FB3F1B}")
-
-    HRESULT = ctypes.c_long
-
-    class IVirtualDesktopManager(comtypes.IUnknown):
-        _iid_ = IID_IVirtualDesktopManager
-        _methods_ = [
-            comtypes.COMMETHOD(
-                [],
-                HRESULT,
-                "IsWindowOnCurrentVirtualDesktop",
-                (["in"], wintypes.HWND, "hwnd"),
-                (["out"], ctypes.POINTER(wintypes.BOOL), "pfOnCurrentDesktop"),
-            ),
-            comtypes.COMMETHOD(
-                [],
-                HRESULT,
-                "GetWindowDesktopId",
-                (["in"], wintypes.HWND, "hwnd"),
-                (["out"], ctypes.POINTER(GUID), "pDesktopId"),
-            ),
-            comtypes.COMMETHOD(
-                [],
-                HRESULT,
-                "MoveWindowToDesktop",
-                (["in"], wintypes.HWND, "hwnd"),
-                (["in"], ctypes.POINTER(GUID), "pDesktopId"),
-            ),
-        ]
-
-
-def force_to_current_desktop(hwnd):
-    if sys.platform != "win32":
-        return
-    manager = comtypes.CoCreateInstance(
-        CLSID_VirtualDesktopManager,
-        interface=IVirtualDesktopManager
-    )
-
-    is_on_current = wintypes.BOOL()
-    manager.IsWindowOnCurrentVirtualDesktop(hwnd, ctypes.byref(is_on_current))
-
-    if not is_on_current.value:
-        desktop_id = GUID()
-        manager.GetWindowDesktopId(
-            ctypes.windll.user32.GetForegroundWindow(),
-            ctypes.byref(desktop_id)
-        )
-        manager.MoveWindowToDesktop(hwnd, ctypes.byref(desktop_id))
 
 # -------------------------
 # Localhost-only web server
@@ -202,22 +89,9 @@ register_widget_static(app=app, widgets_dir=_WIDGETS_DIR)
 _ALL_WIDGETS = load_widgets(app=app, widgets_dir=_WIDGETS_DIR)
 attach_widget_static_map(app=app, widgets_dir=_WIDGETS_DIR, widgets=_ALL_WIDGETS)
 
-_bg_lock = threading.Lock()
-_bg_png: bytes | None = None
-_bg_updated_at = 0.0
-
-_effects_lock = threading.Lock()
-# Runtime disable (e.g. reported by the frontend when software rendering is detected).
-_runtime_disable_visual_effects = False
-
 _articles_lock = threading.Lock()
 _articles_cache: list[dict] = []
 _articles_updated_at = 0.0
-
-_WIDGET_HOST = None
-
-DEFAULT_HOST_WIDTH = 335
-FEED_EXPANDED_HOST_WIDTH = 965
 
 _weather_lock = threading.Lock()
 _weather_cache: dict[tuple[float, float], dict] = {}
@@ -270,7 +144,7 @@ def has_internet_cached(ttl_seconds: float = 3.0, timeout_seconds: float = 1.5, 
         _inet_checked_at = time.time()
         return bool(_inet_online), float(_inet_checked_at)
 
-with open("index.html", "r", encoding="utf-8") as f:
+with open(os.path.join(_WORKSPACE_DIR, "index.html"), "r", encoding="utf-8") as f:
     HTML = f.read()
 
 DEFAULT_LAT = float(os.environ.get("NWS_LAT", "38.8977"))
@@ -1184,13 +1058,19 @@ def get_weather_cached(lat: float, lon: float, ttl_seconds: float = 7 * 60) -> t
 
     try:
         data = _fetch_weather(lat, lon)
-    except Exception:
+    except Exception as exc:
+        app.logger.exception("Weather update failed")
+        if isinstance(exc, ModuleNotFoundError) and exc.name == "requests":
+            error = "Weather requires requests. Install the dependencies in OpenWidgets/requirements-server.txt."
+        else:
+            error = "Weather update failed."
+
         with _weather_lock:
             updated_at = _weather_updated_at.get(key, 0.0)
             cached = _weather_cache.get(key)
             if cached:
                 return dict(cached), float(updated_at or now), "Weather update failed (showing cached)."
-        return None, float(now), "Weather update failed."
+        return None, float(now), error
 
     with _weather_lock:
         _weather_cache[key] = dict(data)
@@ -2106,13 +1986,6 @@ def open_network_settings():
 @app.route("/ui/feed", methods=["POST"])
 def ui_feed_toggle():
     expanded = (request.args.get("expanded") or "").strip() in ("1", "true", "yes", "on")
-    host = _WIDGET_HOST
-    if host is not None:
-        try:
-            host.request_set_width(FEED_EXPANDED_HOST_WIDTH if expanded else DEFAULT_HOST_WIDTH)
-        except Exception:
-            pass
-
     # Persist the UI state so the next launch restores the user's preference.
     try:
         cfg = get_config_cached()
@@ -2242,75 +2115,19 @@ def weather_json():
         headers={"Cache-Control": "no-store"},
     )
 
-@app.route("/update_bg", methods=["POST"])
-def update_bg():
-    global _bg_png, _bg_updated_at
-    if visual_effects_disabled():
-        # Ignore background updates when effects are disabled/unavailable.
-        return ("", 204)
-    data = request.get_data(cache=False)
-    if not data:
-        return ("", 400)
-    with _bg_lock:
-        _bg_png = data
-        _bg_updated_at = time.time()
-    return ("", 204)
-
-
 @app.route("/api/runtime/visual-effects", methods=["POST"])
 def runtime_visual_effects_api():
-    """Update runtime visual-effects state.
-
-    This is used by the frontend to report auto-disabled effects (e.g. software
-    rendering), so the Qt host can avoid taking acrylic screenshots and avoid
-    resize animations.
-    """
+    # Acknowledge reports from the shared browser UI.
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
         return ("", 400)
-
-    # Support either {disabled: bool} or {enabled: bool}.
-    if "disabled" in body:
-        disabled = bool(body.get("disabled", False))
-    elif "enabled" in body:
-        disabled = not bool(body.get("enabled", True))
-    else:
-        disabled = False
-
-    global _runtime_disable_visual_effects
-    with _effects_lock:
-        _runtime_disable_visual_effects = bool(disabled)
     return ("", 204)
 
 @app.route("/bg.png")
 def bg_png():
-    if visual_effects_disabled():
-        if os.path.exists(_FALLBACK_BG_PATH):
-            return send_file(_FALLBACK_BG_PATH, mimetype="image/png", max_age=0)
-        return ("", 404)
-    with _bg_lock:
-        data = _bg_png
-    if not data:
-        return ("", 404)
-    return send_file(io.BytesIO(data), mimetype="image/png", max_age=0)
-
-
-def _runtime_visual_effects_disabled() -> bool:
-    with _effects_lock:
-        return bool(_runtime_disable_visual_effects)
-
-
-def _config_visual_effects_disabled() -> bool:
-    try:
-        cfg = get_config_cached()
-        adv = _normalize_advanced_settings(cfg if isinstance(cfg, dict) else {})
-        return bool(adv.get("disable_visual_effects", False))
-    except Exception:
-        return False
-
-
-def visual_effects_disabled() -> bool:
-    return _config_visual_effects_disabled() or _runtime_visual_effects_disabled()
+    if os.path.exists(_FALLBACK_BG_PATH):
+        return send_file(_FALLBACK_BG_PATH, mimetype="image/png", max_age=0)
+    return ("", 404)
 
 
 def run_server():
@@ -2321,250 +2138,6 @@ def run_server():
         use_reloader=False,
         threaded=True
     )
-
-# -------------------------
-# Qt Widget Host
-# -------------------------
-
-class WidgetHost(QWidget):
-    widthRequested = Signal(int)
-
-    def __init__(self):
-        super().__init__()
-        
-        # Enable dev extras (useful alongside remote debugging).
-        try:
-            QWebEngineSettings.globalSettings().setAttribute(
-                QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled,
-                True,
-            )
-        except Exception:
-            pass
-        self.setWindowFlags(
-            Qt.FramelessWindowHint |
-            Qt.WindowStaysOnTopHint |
-            Qt.BypassWindowManagerHint
-        )
-
-        self.setFocusPolicy(Qt.StrongFocus)
-
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setAutoFillBackground(False)
-
-        screen = QApplication.primaryScreen().availableGeometry()
-        width = DEFAULT_HOST_WIDTH
-
-        self.setFixedSize(QSize(width, screen.height()))
-        self.move(screen.left(), screen.top())
-
-        self.view = QWebEngineView(self)
-        self.view.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.view.setAttribute(Qt.WA_NoSystemBackground, True)
-        self.view.setAutoFillBackground(False)
-        self.view.setStyleSheet("background: transparent;")
-        self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
-
-        self.view.setGeometry(0, 0, width, screen.height())
-        self.view.setUrl(QUrl("http://127.0.0.1:8765"))
-
-        hwnd = int(self.winId())
-        enable_mica(hwnd)
-
-        self._bg_timer = QTimer(self)
-        self._bg_timer.setInterval(25500)
-        self._bg_timer.timeout.connect(self.capture_and_report_bg)
-
-        self._width_anim_timer = QTimer(self)
-        self._width_anim_timer.setInterval(9)  # ~60fps
-        self._width_anim_timer.timeout.connect(self._tick_width_animation)
-        self._target_width: int | None = None
-        self._animating_width = False
-
-        self.widthRequested.connect(self._start_width_animation)
-
-    def request_set_width(self, width: int):
-        """Request a host resize from any thread.
-
-        Flask handlers run on a background thread; Qt widgets must be resized on
-        the GUI thread. We queue the resize onto the widget's thread.
-        """
-        try:
-            width_i = int(width)
-        except Exception:
-            return
-
-        try:
-            QMetaObject.invokeMethod(
-                self,
-                "_start_width_animation",
-                Qt.QueuedConnection,
-                Q_ARG(int, width_i),
-            )
-        except Exception:
-            # Best-effort fallback; avoid crashing if invokeMethod/Q_ARG fails.
-            try:
-                self.widthRequested.emit(int(width_i))
-            except Exception:
-                pass
-
-    @Slot(int)
-    def _start_width_animation(self, width: int):
-        screen = QApplication.primaryScreen().availableGeometry()
-        width = int(width)
-        if width < 320:
-            width = 320
-        if width > max(320, int(screen.width())):
-            width = int(screen.width())
-
-        if visual_effects_disabled():
-            # No animations when effects are disabled/unavailable.
-            self._target_width = None
-            try:
-                self._width_anim_timer.stop()
-            except Exception:
-                pass
-            self._animating_width = False
-            self._set_width_now(int(width))
-            return
-
-        self._target_width = int(width)
-        if not self._width_anim_timer.isActive():
-            self._width_anim_timer.start()
-
-    def _set_width_now(self, width: int) -> None:
-        screen = QApplication.primaryScreen().availableGeometry()
-        width = int(width)
-        if width < 320:
-            width = 320
-        if width > max(320, int(screen.width())):
-            width = int(screen.width())
-        self.setFixedSize(QSize(width, screen.height()))
-        self.view.setGeometry(0, 0, width, screen.height())
-
-    def _tick_width_animation(self) -> None:
-        if visual_effects_disabled():
-            target = self._target_width
-            self._target_width = None
-            self._animating_width = False
-            self._width_anim_timer.stop()
-            if target is not None:
-                self._set_width_now(int(target))
-            return
-
-        target = self._target_width
-        if target is None:
-            self._animating_width = False
-            self._width_anim_timer.stop()
-            return
-
-        cur = int(self.width())
-        diff = int(target) - int(cur)
-
-        if diff == 0:
-            self._animating_width = False
-            self._width_anim_timer.stop()
-            if not visual_effects_disabled():
-                QTimer.singleShot(0, self.capture_and_report_bg)
-            return
-
-        self._animating_width = True
-
-        ad = abs(diff)
-        step = max(2, int(ad * 0.25))   # ease-out feel
-        if step > 56:
-            step = 56
-
-        next_w = cur + (step if diff > 0 else -step)
-        if (diff > 0 and next_w > target) or (diff < 0 and next_w < target):
-            next_w = target
-
-        self._set_width_now(int(next_w))
-
-    @Slot(int)
-    def _apply_width(self, width: int):
-        # Optional: keep an "instant" helper for manual calls/debugging.
-        self._set_width_now(int(width))
-        if not visual_effects_disabled():
-            QTimer.singleShot(0, self.capture_and_report_bg)
-
-    def _post_png_to_server(self, png_bytes: bytes):
-        try:
-            req = urllib.request.Request(
-                "http://127.0.0.1:8765/update_bg",
-                data=png_bytes,
-                method="POST",
-                headers={"Content-Type": "image/png"},
-            )
-            with _urlopen_with_proxy_setting(req, timeout=0.5, context=None, guard_lightspeed=False):
-                pass
-        except Exception:
-            # Best-effort; if it fails, the UI still works (it just won't update the acrylic).
-            pass
-
-    def capture_and_report_bg(self):
-        if visual_effects_disabled():
-            return
-        # Capture the screen area behind this window and POST it to the local web server.
-        # To avoid capturing ourselves, temporarily make the window fully transparent.
-        try:
-            old_opacity = self.windowOpacity()
-        except Exception:
-            old_opacity = 1.0
-
-        try:
-            self.setWindowOpacity(0.0)
-            QApplication.processEvents()
-
-            geo = self.frameGeometry()
-            screen = self.windowHandle().screen() if self.windowHandle() else QApplication.primaryScreen()
-            if not screen:
-                return
-
-            pix = screen.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
-            if pix.isNull():
-                return
-
-            # PNG encode
-            from PySide6.QtCore import QBuffer, QByteArray
-            ba = QByteArray()
-            buf = QBuffer(ba)
-            buf.open(QBuffer.WriteOnly)
-            pix.save(buf, "PNG")
-            buf.close()
-
-            self._post_png_to_server(bytes(ba))
-        finally:
-            self.setWindowOpacity(old_opacity)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.raise_()
-        self.activateWindow()
-
-        if not visual_effects_disabled():
-            # Prime the acrylic background ASAP, then keep it fresh.
-            QTimer.singleShot(0, self.capture_and_report_bg)
-            if not self._bg_timer.isActive():
-                self._bg_timer.start()
-
-    def event(self, e):
-        if e.type() == QEvent.WindowDeactivate:
-            # When remote debugging is enabled, keep the window open so DevTools
-            # stays attached even if focus changes.
-            if not _WEBVIEW_REMOTE_DEBUG:
-                self.close()
-                return True
-            return False  # allow normal handling without closing
-
-        if e.type() in (QEvent.Move, QEvent.Resize):
-            if not self._animating_width and not visual_effects_disabled():
-                QTimer.singleShot(0, self.capture_and_report_bg)
-        return super().event(e)
-
-# -------------------------
-# Main
-# -------------------------
 
 if __name__ == "__main__":
     run_server()

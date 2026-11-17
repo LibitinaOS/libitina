@@ -18,3 +18,5 @@ OpenWidgets/userfeedconfig.json
 # Prevent disk images and EFI vars from being commited
 *.qcow2
 *.fd
+# Bundled weather client source
+!/OpenWidgets/nws-ez/nws_ez/errors.py

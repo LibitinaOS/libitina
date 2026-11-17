@@ -1,0 +1,3 @@
+# Dependencies for server_only.py. The bundled nws-ez is loaded from source.
+Flask>=3.0
+requests>=2.31.0
