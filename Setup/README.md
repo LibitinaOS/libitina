@@ -18,8 +18,16 @@ timezone and hostname settings through systemd tools. Keyboard settings use Debi
 keyboard setters. It selects YuiHirasawa for subsequent logins,
 deletes the password export and temporary account, removes the OOBE autologin,
 session and sudo rule, marks setup complete, and reboots. Normal boots show the
-GTK greeter. A failed provisioning service restarts LightDM so setup can be retried;
-inspect `journalctl -u libitina-setup` for errors.
+GTK greeter. Provisioning writes a durable `/var/lib/libitina-setup-in-progress`
+marker before changing the system and removes it on success. If provisioning fails
+or is interrupted, the next OOBE session shows a warning recommending reinstallation
+before opening the wizard. “Shut Down” powers off; “Continue” opens setup again.
+The warning remains on subsequent attempts until provisioning succeeds. Each OOBE
+session discards the previous password export so closing the wizard cannot silently
+retry old settings. A failed service restarts LightDM; inspect
+`journalctl -u libitina-setup` for errors.
+The boot recovery service restores the temporary account and OOBE session files
+if an interruption occurred while they were being removed at the end of setup.
 
 The GitHub profile currently supplies the wizard's name and username; importing
 its picture into the permanent account is not yet implemented. Network selection

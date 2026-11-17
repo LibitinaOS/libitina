@@ -58,5 +58,90 @@ class ValidationTests(unittest.TestCase):
                         provision.validate(data)
 
 
+class RecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.state = self.root / 'state'
+        self.marker = self.root / 'in-progress'
+        self.files = tuple(self.root / name for name in ('autologin', 'sudoers', 'session'))
+        for path in self.files:
+            path.write_text(path.name)
+            path.chmod(0o440 if path.name == 'sudoers' else 0o644)
+        for name, value in (('STATE', self.state), ('IN_PROGRESS', self.marker),
+                            ('OOBE_FILES', self.files)):
+            patcher = patch.object(provision, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for target in ('geteuid', 'sync'):
+            patcher = patch.object(provision.os, target, return_value=0)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_interruption_before_first_system_change_leaves_marker(self):
+        with patch.object(provision, 'run', side_effect=RuntimeError('interrupted')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                provision.main()
+        self.assertTrue(self.marker.exists())
+        run.assert_called_once_with('systemctl', 'stop', 'lightdm.service')
+
+    def test_boot_restores_deleted_oobe_account_and_files(self):
+        provision.mark_provisioning_started()
+        for path in self.files:
+            path.unlink()
+        with patch.object(provision.pwd, 'getpwnam', side_effect=KeyError), \
+                patch.object(provision, 'run') as run:
+            provision.recover_oobe()
+        run.assert_called_once_with('useradd', '--create-home', '--shell', '/bin/bash', 'defaultuser0')
+        for path in self.files:
+            self.assertEqual(path.read_text(), path.name)
+        self.assertEqual(self.files[1].stat().st_mode & 0o777, 0o440)
+        self.assertTrue(self.marker.exists())
+
+    def test_normal_and_completed_boots_do_not_restore_oobe(self):
+        for complete in (False, True):
+            if complete:
+                provision.mark_provisioning_started()
+                (self.state / 'setup-complete').touch()
+            with patch.object(provision.pwd, 'getpwnam') as lookup, \
+                    patch.object(provision, 'run') as run:
+                provision.recover_oobe()
+            lookup.assert_not_called()
+            run.assert_not_called()
+
+    def test_success_removes_marker_only_after_completion(self):
+        export = self.root / 'setup.json'
+        export.write_text('{}')
+        account = SimpleNamespace(pw_uid=export.stat().st_uid, pw_gid=export.stat().st_gid,
+                                  pw_dir=str(self.root), pw_name='alice')
+        # Simulate a retry of the account created by the interrupted attempt.
+        self.state.mkdir()
+        (self.state / 'setup-user').write_text('alice')
+        data = ValidationTests().config()
+
+        def redirect_path(value):
+            return self.root / 'locale.gen' if value == '/etc/locale.gen' else Path(value)
+
+        def run(*args, **kwargs):
+            if args == ('systemctl', 'reboot'):
+                self.assertTrue((self.state / 'setup-complete').exists())
+                self.assertFalse(self.marker.exists())
+            else:
+                self.assertTrue(self.marker.exists())
+
+        with patch.object(provision, 'EXPORT', export), \
+                patch.object(provision, 'Path', side_effect=redirect_path), \
+                patch.object(provision.pwd, 'getpwnam', return_value=account), \
+                patch.object(provision, 'validate', return_value=data), \
+                patch.object(provision.os, 'chown'), \
+                patch.object(provision, 'apply_appearance'), \
+                patch.object(provision.subprocess, 'run'), \
+                patch.object(provision, 'run', side_effect=run):
+            provision.main()
+        self.assertTrue((self.state / 'setup-complete').exists())
+        self.assertFalse(self.marker.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

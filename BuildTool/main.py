@@ -336,7 +336,8 @@ def configure_oobe(root):
           'Exec=/bin/sh /usr/share/libitina/Setup/oobe-session.sh\n'
           'DesktopNames=labwc;\nX-LightDM-Session-Type=wayland\n')
     write(root, '/etc/sudoers.d/libitina-oobe',
-          'defaultuser0 ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block libitina-setup.service\n',
+          'defaultuser0 ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block libitina-setup.service, '
+          '/usr/bin/systemctl poweroff\n',
           0o440)
     write(root, '/etc/systemd/system/libitina-setup.service',
           '[Unit]\nDescription=Apply Libitina first-boot setup\n'
@@ -345,6 +346,15 @@ def configure_oobe(root):
           'ExecStart=/usr/bin/python3 /usr/share/libitina/Setup/provision.py\n'
           'ExecStopPost=/usr/bin/systemctl --no-block start lightdm.service\n'
           'TimeoutStartSec=180\n')
+    write(root, '/etc/systemd/system/libitina-oobe-recovery.service',
+          '[Unit]\nDescription=Recover interrupted Libitina setup\n'
+          'Before=lightdm.service\n'
+          'ConditionPathExists=/var/lib/libitina-setup-in-progress\n'
+          'ConditionPathExists=!/var/lib/libitina/setup-complete\n'
+          '[Service]\nType=oneshot\n'
+          'ExecStart=/usr/bin/python3 /usr/share/libitina/Setup/provision.py --recover-oobe\n'
+          '[Install]\nWantedBy=graphical.target\n')
+    run('chroot', root, 'systemctl', 'enable', 'libitina-oobe-recovery.service')
 
 
 def install_expand_service(root):

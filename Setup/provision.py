@@ -5,17 +5,61 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shutil
 import stat
 import subprocess
+import sys
 
 STATE = Path('/var/lib/libitina')
+# Outside the private state directory so the unprivileged OOBE can read it.
+IN_PROGRESS = Path('/var/lib/libitina-setup-in-progress')
 EXPORT = Path('/home/defaultuser0/.config/os-setup/setup.json')
 LANGUAGES = {'en_US', 'en_GB', 'es_ES', 'fr_FR', 'de_DE', 'it_IT', 'pt_BR', 'ja_JP', 'zh_CN'}
 KEYBOARDS = {'us', 'gb', 'es', 'fr', 'de', 'it', 'jp'}
+OOBE_FILES = (
+    Path('/etc/lightdm/lightdm.conf.d/90-libitina-oobe.conf'),
+    Path('/etc/sudoers.d/libitina-oobe'),
+    Path('/usr/share/wayland-sessions/libitina-oobe.desktop'),
+)
 
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+def mark_provisioning_started():
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backup = STATE / 'oobe-recovery'
+    backup.mkdir(mode=0o700, exist_ok=True)
+    if not IN_PROGRESS.exists():
+        for path in OOBE_FILES:
+            shutil.copy2(path, backup / path.name)
+    # Include the recovery copies in the durability boundary.
+    os.sync()
+    # Persist both the file and directory entry before changing the system.
+    with IN_PROGRESS.open('w') as marker:
+        marker.flush()
+        os.fsync(marker.fileno())
+    fd = os.open(IN_PROGRESS.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def recover_oobe():
+    """Restore the warning session if power was lost during final cleanup."""
+    if os.geteuid() != 0:
+        raise RuntimeError('Root required')
+    if not IN_PROGRESS.exists() or (STATE / 'setup-complete').exists():
+        return
+    try:
+        pwd.getpwnam('defaultuser0')
+    except KeyError:
+        run('useradd', '--create-home', '--shell', '/bin/bash', 'defaultuser0')
+    for path in OOBE_FILES:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(STATE / 'oobe-recovery' / path.name, path)
 
 # todo: the main OOBE program should sanity check each step, make sure it does
 def validate(data):
@@ -64,6 +108,7 @@ def main():
         raise RuntimeError('Root required')
     if (STATE / 'setup-complete').exists():
         return
+    mark_provisioning_started()
     # Stop the unprivileged session before reading its private export, avoiding races.
     run('systemctl', 'stop', 'lightdm.service')
     subprocess.run(['loginctl', 'terminate-user', 'defaultuser0'], check=False)
@@ -110,14 +155,17 @@ def main():
     # Destroy the plaintext password export before removing the temporary home.
     EXPORT.unlink()
     run('userdel', '--remove', 'defaultuser0')
-    for path in ('/etc/lightdm/lightdm.conf.d/90-libitina-oobe.conf',
-                 '/etc/sudoers.d/libitina-oobe',
-                 '/usr/share/wayland-sessions/libitina-oobe.desktop'):
-        Path(path).unlink(missing_ok=True)
+    for path in OOBE_FILES:
+        path.unlink(missing_ok=True)
     (STATE / 'setup-complete').touch(mode=0o600)
     pending.unlink(missing_ok=True)
+    os.sync()
+    IN_PROGRESS.unlink(missing_ok=True)
     run('systemctl', 'reboot')
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--recover-oobe']:
+        recover_oobe()
+    else:
+        main()

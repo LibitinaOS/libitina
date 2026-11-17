@@ -379,8 +379,49 @@ class SetupWizard(Gtk.Window):
         Gtk.main_quit()
 
 
-if __name__ == '__main__':
+def confirm_restart_setup():
+    dialog = Gtk.MessageDialog(
+        flags=Gtk.DialogFlags.MODAL,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.NONE,
+        text='Provisioning LibitinaOS failed for an unknown reason. '
+             'You can attempt to restart setup, but it is recommended that you '
+             'reinstall LibitinaOS.')
+    dialog.set_position(Gtk.WindowPosition.CENTER)
+    dialog.set_deletable(False)
+    dialog.add_button('Shut Down', Gtk.ResponseType.REJECT)
+    dialog.add_button('Continue', Gtk.ResponseType.ACCEPT)
+    dialog.set_default_response(Gtk.ResponseType.REJECT)
+    try:
+        while True:
+            response = dialog.run()
+            if response == Gtk.ResponseType.ACCEPT:
+                return True
+            if response == Gtk.ResponseType.REJECT:
+                try:
+                    subprocess.run(['sudo', '-n', '/usr/bin/systemctl', 'poweroff'], check=True)
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    error = Gtk.MessageDialog(
+                        transient_for=dialog, flags=Gtk.DialogFlags.MODAL,
+                        message_type=Gtk.MessageType.ERROR,
+                        buttons=Gtk.ButtonsType.OK, text='Could not shut down')
+                    error.format_secondary_text(str(exc))
+                    error.run()
+                    error.destroy()
+                else:
+                    return False
+    finally:
+        dialog.destroy()
+
+
+def main():
+    if Path('/var/lib/libitina-setup-in-progress').exists() and not confirm_restart_setup():
+        return
     window = SetupWizard()
     window.connect('destroy', Gtk.main_quit)
     window.show_all()
     Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
