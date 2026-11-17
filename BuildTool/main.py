@@ -454,6 +454,14 @@ def build_disk(root, args, raw, expand):
         run('losetup', '-d', loop)
 
 
+def finalize_output(output):
+    # sudo is needed for the build, but the host artifact belongs to its caller.
+    uid = int(os.environ.get('SUDO_UID', os.getuid()))
+    gid = int(os.environ.get('SUDO_GID', os.getgid()))
+    os.chown(output, uid, gid)
+    output.chmod(0o644)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -520,6 +528,7 @@ def main():
             if args.format == 'qcow2':
                 run('qemu-img', 'convert', '-f', 'raw', '-O', 'qcow2',
                     '-o', 'compat=1.1', raw, args.output)
+    finalize_output(args.output)
     print(f'Created: {args.output}')
 
 

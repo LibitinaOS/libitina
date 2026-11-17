@@ -12,6 +12,9 @@ Skeleton home settings apply it to `defaultuser0` and accounts created by setup.
 
 Run on a Linux amd64 or arm64 host as root. The default target remains amd64.
 ZIP, raw IMG and QCOW2 outputs support `--arch amd64` and `--arch arm64`.
+Completed output files belong to the user and group that invoked `sudo`, with
+permissions `0644` (owner read/write, everyone else read). When run directly as
+root, output files remain owned by root.
 
 On Debian, install the common host tools:
 
