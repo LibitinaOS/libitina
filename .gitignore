@@ -14,3 +14,7 @@ panic*
 Code/Stockwood/Monika/built/*
 Code/Ranboo/RanbooSwiftUI/RanbooSwiftUI.xcodeproj/project.xcworkspace/xcuserdata/dapixelprowler.xcuserdatad/UserInterfaceState.xcuserstate
 OpenWidgets/userfeedconfig.json
+
+# Prevent disk images and EFI vars from being commited
+*.qcow2
+*.fd
