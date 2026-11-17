@@ -1237,6 +1237,12 @@
             margin-right: auto;
         }
 
+        @media (max-width: 650px) {
+            .widget {
+                width: 100%;
+            }
+        }
+
         .widget h2 {
             margin: 0 0 10px 0;
             font-size: 14px;
@@ -1571,19 +1577,33 @@
             outline-offset: 2px;
         }
 
-        @media (max-width: 650px) {
-            body.feed-expanded .main-row {
-                flex-direction: column;
-            }
+        .dashboard-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
 
-            body.feed-expanded #widgets-pane {
-                max-width: none;
-                max-height: 45%;
-            }
+        body:not(.feed-expanded) .dashboard-actions .feed-actions,
+        body.oobe-active .dashboard-actions .feed-actions {
+            display: none;
+        }
 
-            .header-row {
-                flex-wrap: wrap;
-            }
+        body.feed-stacked .header-row {
+            flex-wrap: wrap;
+        }
+
+        body.feed-stacked.feed-expanded .main-row {
+            display: block;
+            overflow-y: auto;
+            scrollbar-width: none;
+        }
+
+        body.feed-stacked.feed-expanded #widgets-pane,
+        body.feed-stacked.feed-expanded #feed-pane {
+            max-width: none;
+            overflow: visible;
+            transition: none;
         }
 
         .feed-card-title a:hover, .title a:hover, .feed-card-pub-btn:hover {
@@ -1614,7 +1634,7 @@
                     <div class="small" id="dashboard-date"></div>
                     <h1 id="dashboard-title">Free Schlep</h1>
                 </div>
-                <div style="display:flex; gap: 8px;">
+                <div class="dashboard-actions">
                     <button class="btn" id="feed-toggle" type="button" aria-pressed="false">Feed</button>
                     <button class="btn" id="exp-settings-open" type="button">ExpSetting</button>
                 </div>
@@ -2423,6 +2443,22 @@
         const feedGrid = document.getElementById('feed-grid');
         const feedStatus = document.getElementById('feed-status');
         const feedRefreshBtn = document.getElementById('feed-refresh');
+        const feedActions = feedRefreshBtn.parentElement;
+        const feedHeader = feedActions.parentElement;
+        const dashboardActions = feedToggleBtn.parentElement;
+        const mainRow = feedPane.parentElement;
+        const stackedFeedLayout = window.matchMedia('(orientation: portrait), (max-width: 650px)');
+
+        function updateFeedLayout() {
+            const stacked = stackedFeedLayout.matches;
+            document.body.classList.toggle('feed-stacked', stacked);
+            const actionsParent = stacked ? dashboardActions : feedHeader;
+            if (feedActions.parentElement !== actionsParent) actionsParent.append(feedActions);
+        }
+
+        stackedFeedLayout.addEventListener('change', updateFeedLayout);
+        updateFeedLayout();
+
 
         function _renderFeedSkeleton(count) {
             const n = Math.max(1, Math.min(30, Number(count) || 8));
@@ -2832,19 +2868,19 @@
         if (feedRefreshBtn) {
             feedRefreshBtn.addEventListener('click', () => refreshFeed({ force: true }));
         }
-        if (feedPane) {
-            feedPane.addEventListener('scroll', () => {
-                if (!_feedExpanded) return;
-                if (_feedLoading || !_feedHasMore) return;
+        function loadMoreFeedOnScroll(event) {
+            if (!_feedExpanded || _feedLoading || !_feedHasMore) return;
 
-                // Load next page when near bottom.
-                const threshold = 80;
-                const remaining = feedPane.scrollHeight - feedPane.scrollTop - feedPane.clientHeight;
-                if (remaining <= threshold) {
-                    loadFeedPage({ reset: false });
-                }
-            });
+            const scroller = event.currentTarget;
+            const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+            if (remaining <= 80) {
+                loadFeedPage({ reset: false });
+            }
         }
+
+        mainRow.addEventListener('scroll', loadMoreFeedOnScroll);
+        feedPane.addEventListener('scroll', loadMoreFeedOnScroll);
+
         if (feedPane) {
             feedPane.addEventListener('click', (e) => {
                 const srcBtn = e.target && e.target.closest ? e.target.closest('[data-source-id]') : null;
