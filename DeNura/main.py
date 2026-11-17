@@ -9,6 +9,15 @@ from pathlib import Path
 
 OS_RELEASE = Path("/etc/os-release")
 BACKUP = Path("/etc/os-release-backup")
+CONSOLE_BANNERS = {
+    Path("/etc/issue"): "{pretty_name} \\n \\l\n\n",
+    Path("/etc/issue.net"): "{pretty_name}\n",
+}
+
+
+def banner_backup_path(path: Path, os_release_backup: Path) -> Path:
+    suffix = os_release_backup.name.removeprefix(BACKUP.name)
+    return os_release_backup.with_name(f"{path.name}-backup{suffix}")
 
 
 def parse_os_release(path: Path) -> dict[str, str]:
@@ -98,7 +107,7 @@ def find_latest_backup() -> Path | None:
 
     backups.extend(
         path
-        for path in Path("/etc").glob("os-release-backup-*")
+        for path in BACKUP.parent.glob(f"{BACKUP.name}-*")
         if path.is_file()
     )
 
@@ -118,6 +127,11 @@ def revert():
 
     shutil.copy2(backup, OS_RELEASE)
     OS_RELEASE.chmod(0o644)
+    for path in CONSOLE_BANNERS:
+        banner_backup = banner_backup_path(path, backup)
+        if banner_backup.exists():
+            shutil.copy2(banner_backup, path)
+            path.chmod(0o644)
 
     print(f"Restored {OS_RELEASE} from:")
     print(backup)
@@ -142,6 +156,7 @@ def rebrand():
         part for part in (get_org_name_for_pretty_name(old_name), display_version)
         if part
     )
+    pretty_name = f"LibitinaOS ({base_display_name})"
     id_like = " ".join(part for part in (old_id, old_id_like) if part)
     codename_line = (
         f'VERSION_CODENAME="{old_version_codename}"\n'
@@ -152,6 +167,9 @@ def rebrand():
     backup_path = get_backup_path()
 
     shutil.copy2(OS_RELEASE, backup_path)
+    for path in CONSOLE_BANNERS:
+        if path.exists():
+            shutil.copy2(path, banner_backup_path(path, backup_path))
 
     print(f"Backed up existing os-release to:")
     print(backup_path)
@@ -166,7 +184,7 @@ def rebrand():
     # the variables defined above.
     # ============================================================
 
-    new_os_release = f"""PRETTY_NAME="LibitinaOS ({base_display_name})"
+    new_os_release = f"""PRETTY_NAME="{pretty_name}"
 NAME="LibitinaOS"
 VERSION_ID="{old_version_id}"
 VERSION="{old_version}"
@@ -185,6 +203,10 @@ BASE_ID_LIKE={old_id_like}
 
     OS_RELEASE.write_text(new_os_release, encoding="utf-8")
     OS_RELEASE.chmod(0o644)
+    for path, banner in CONSOLE_BANNERS.items():
+        if banner_backup_path(path, backup_path).exists():
+            path.write_text(banner.format(pretty_name=pretty_name), encoding="utf-8")
+            path.chmod(0o644)
 
     print("Rebranding complete.")
     print()

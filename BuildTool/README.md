@@ -1,6 +1,7 @@
 # Building images
 
 BuildTool runs DeNura inside the guest to rebrand its OS release as LibitinaOS.
+DeNura also brands the TTY and serial console login banners as LibitinaOS.
 It also runs `Applications/install.py --system`, installing all complete bundled
 applications under `/usr/share/libitina/applications` with desktop entries in
 `/usr/share/applications`, available to every user. Application selection and
