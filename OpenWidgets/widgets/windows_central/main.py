@@ -1291,15 +1291,15 @@ def get_widget():
 #widget-windows_central .articles { display: flex; flex-direction: column; gap: 10px; }
 #widget-windows_central .article { display: flex; gap: 10px; align-items: flex-start; }
 #widget-windows_central .thumb {
-  width: 72px; height: 54px; border-radius: 6px; object-fit: cover;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  width: 72px; height: 54px; border-radius: var(--card-radius); object-fit: cover;
+  background: var(--panel-raised);
+  border: 1px solid var(--section-border);
   flex: 0 0 auto;
 }
 #widget-windows_central .meta { min-width: 0; }
 #widget-windows_central .title { font-size: 13px; line-height: 1.25; margin-bottom: 4px; }
 #widget-windows_central .title a {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--fg);
   text-decoration: none;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1313,7 +1313,7 @@ def get_widget():
   overflow: hidden; text-overflow: ellipsis;
 }
 #widget-windows_central .byline a.pub {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--fg);
   text-decoration: none;
 }
 #widget-windows_central .byline a.pub:hover { text-decoration: underline; }
@@ -1322,7 +1322,7 @@ def get_widget():
   display: inline-flex; align-items: center;
   padding: 2px 6px; border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.05);
+  background: var(--panel);
 }
 """.strip(),
         "js": """

@@ -35,9 +35,9 @@ def get_widget():
 #widget-feed_debug [data-fd-list] { display: flex; flex-direction: column; gap: 8px; }
 #widget-feed_debug .row {
   display: flex; flex-direction: column; gap: 2px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: rgba(255,255,255,0.04);
-  border-radius: 10px;
+  border: 1px solid var(--section-border);
+  background: var(--section-bg);
+  border-radius: var(--card-radius);
   padding: 8px 10px;
 }
 #widget-feed_debug .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -51,7 +51,7 @@ def get_widget():
 }
 #widget-feed_debug .badge.ok { background: rgba(0, 255, 0, 0.12); }
 #widget-feed_debug .badge.err { background: rgba(255, 64, 64, 0.12); }
-#widget-feed_debug .badge.unk { background: rgba(255, 255, 255, 0.06); }
+#widget-feed_debug .badge.unk { background: var(--panel-raised); }
 #widget-feed_debug .meta { font-size: 11px; opacity: 0.78; }
 #widget-feed_debug .error { font-size: 11px; opacity: 0.85; }
 """.strip(),

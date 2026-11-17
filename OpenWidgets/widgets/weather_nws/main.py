@@ -21,11 +21,11 @@ def get_widget():
 /* Scoped via #widget-weather_nws */
 #widget-weather_nws h2 { margin-bottom: 8px; }
 #widget-weather_nws .weather-row { display: flex; gap: 10px; align-items: center; }
-#widget-weather_nws .weather-icon { width: 44px; height: 44px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); object-fit: contain; }
+#widget-weather_nws .weather-icon { width: 44px; height: 44px; border-radius: var(--card-radius); background: var(--panel-raised); border: 1px solid var(--section-border); object-fit: contain; }
 #widget-weather_nws .weather-temp { font-size: 28px; font-weight: 700; line-height: 1.0; }
 #widget-weather_nws .weather-lines { display: flex; flex-direction: column; gap: 2px; }
 #widget-weather_nws .hourly-strip { margin-top: 10px; display: flex; gap: 8px; overflow: hidden; }
-#widget-weather_nws .hour-card { flex: 1 1 0; min-width: 0; border-radius: 10px; padding: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10); text-align: center; }
+#widget-weather_nws .hour-card { flex: 1 1 0; min-width: 0; border-radius: var(--card-radius); padding: 8px; background: var(--panel); border: 1px solid var(--section-border); text-align: center; }
 #widget-weather_nws .hour-label { font-size: 11px; opacity: 0.75; margin-bottom: 4px; }
 #widget-weather_nws .hour-icon { width: 26px; height: 26px; margin: 0 auto 4px auto; object-fit: contain; }
 #widget-weather_nws .hour-temp { font-size: 13px; font-weight: 700; }

@@ -7,7 +7,7 @@ def get_widget():
 """.strip(),
         "css": """
 /* Scoped via #widget-link */
-#widget-link a { color: rgba(255,255,255,0.92); text-decoration: underline; }
+#widget-link a { color: var(--fg); text-decoration: underline; }
 """.strip(),
         "js": """
 (function(){

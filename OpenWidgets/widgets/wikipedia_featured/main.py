@@ -173,9 +173,9 @@ def get_widget():
 #widget-wikipedia_featured .wiki-thumb {
   width: 54px;
   height: 54px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: var(--card-radius);
+  background: var(--panel-raised);
+  border: 1px solid var(--section-border);
   object-fit: cover;
   flex: 0 0 auto;
 }
@@ -186,7 +186,7 @@ def get_widget():
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-decoration: none;
-  color: rgba(255,255,255,0.92);
+  color: var(--fg);
   font-weight: 700;
   line-height: 1.25;
 }
