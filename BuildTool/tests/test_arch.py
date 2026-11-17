@@ -60,7 +60,7 @@ class ArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(builder, 'chroot_mounts', return_value=contextlib.nullcontext()), \
                 patch.object(builder, 'inhibit_services', return_value=contextlib.nullcontext()), \
-                patch.object(builder, 'configure_oobe'), patch.object(builder, 'install_gtk_themes'), \
+                patch.object(builder, 'configure_oobe'), patch.object(builder, 'install_desktop_appearance'), \
                 patch.object(builder, 'run') as run:
             builder.install_guest(Path(temp), SimpleNamespace(arch='arm64', root_password=None), True)
             packages = next(call.args for call in run.call_args_list if 'install' in call.args)

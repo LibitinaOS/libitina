@@ -259,7 +259,7 @@ def install_guest(root, args, bootable):
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd',
                 'gsettings-desktop-schemas', 'libglib2.0-bin', 'dconf-gsettings-backend',
-                'desktop-file-utils']
+                'desktop-file-utils', 'fontconfig']
     if bootable:
         packages += [f'linux-image-{args.arch}', f'grub-efi-{args.arch}-bin',
                      'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
@@ -276,7 +276,7 @@ def install_guest(root, args, bootable):
             'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
         verify_guest_commands(root, bootable)
         run('chroot', root, 'apt-get', 'clean')
-        install_gtk_themes(root)
+        install_desktop_appearance(root)
         run('chroot', root, '/usr/bin/python3',
             '/usr/share/libitina/Applications/install.py', '--system')
         configure_oobe(root)
@@ -314,17 +314,24 @@ def verify_guest_commands(root, bootable):
         'verify-guest-commands', *commands)
 
 
-def install_gtk_themes(root):
-    source = root / 'usr/share/libitina/Applications/Internal/Global/DeletescapeUiThemeInstall/themes'
+def install_desktop_appearance(root):
+    bundled = root / 'usr/share/libitina'
+    source = bundled / 'Applications/Internal/Global/DeletescapeUiThemeInstall/themes'
     for name in ('DeletescapeUi', 'DeletescapeUi-Dark'):
         shutil.copytree(source / name, root / 'usr/share/themes' / name, dirs_exist_ok=True)
+    fonts = '/usr/share/fonts/truetype/inclusive-sans'
+    shutil.copytree(bundled / 'Fonts/InclusiveSans', root / fonts.lstrip('/'), dirs_exist_ok=True)
+    run('chroot', root, 'fc-cache', fonts)
+
+    interface_font = 'Inclusive Sans 11'
     settings = ('[Settings]\ngtk-theme-name=DeletescapeUi\n'
                 'gtk-application-prefer-dark-theme=false\n')
-    # System fallback plus user defaults inherited by both OOBE and useradd.
-    write(root, '/etc/gtk-3.0/settings.ini', settings)
+    # Keep the GTK font fallback system-wide so provisioning can rewrite user theme settings.
+    write(root, '/etc/gtk-3.0/settings.ini', settings + f'gtk-font-name={interface_font}\n')
     write(root, '/etc/skel/.config/gtk-3.0/settings.ini', settings)
     write(root, '/usr/share/glib-2.0/schemas/99_libitina.gschema.override',
-          "[org.gnome.desktop.interface]\ngtk-theme='DeletescapeUi'\ncolor-scheme='default'\n")
+          "[org.gnome.desktop.interface]\ngtk-theme='DeletescapeUi'\ncolor-scheme='default'\n"
+          f"font-name='{interface_font}'\n")
     run('chroot', root, 'glib-compile-schemas', '/usr/share/glib-2.0/schemas')
 
 
