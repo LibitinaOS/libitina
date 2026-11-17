@@ -1,5 +1,6 @@
 """Live, cover-scaled wallpapers and a per-monitor Wayland background utility."""
 
+import json
 import logging
 import math
 import platform
@@ -46,7 +47,7 @@ else:
 
 
 def internal_watermark_text():
-    """Read host and checkout information without relying on the working directory."""
+    """Read host and checkout information, falling back to BuildTool metadata."""
     try:
         pretty_name = platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
     except OSError:
@@ -57,12 +58,26 @@ def internal_watermark_text():
             return subprocess.check_output(
                 ["git", *args], cwd=Path(__file__).resolve().parent,
                 stderr=subprocess.DEVNULL, text=True, timeout=2,
-            ).strip() or "unknown"
+            ).strip() or None
         except (OSError, subprocess.SubprocessError):
-            return "unknown"
+            return None
 
     branch = git_value("rev-parse", "--abbrev-ref", "HEAD")
     commit = git_value("rev-parse", "HEAD")
+    if branch is None or commit is None:
+        try:
+            metadata = json.loads(Path("/etc/libitina-info").read_text())
+        except (OSError, ValueError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        def stored_value(key):
+            value = metadata.get(key)
+            return value.strip() if isinstance(value, str) and value.strip() else "unknown"
+
+        branch = branch or stored_value("git_branch")
+        commit = commit or stored_value("git_commit")
     return f"{pretty_name}\n{platform.release()}\nb={branch} c={commit}\nI <3 Jamie Paige"
 
 

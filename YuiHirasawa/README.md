@@ -64,6 +64,8 @@ Restart, and Power Off keep their confirmation dialogs.
 Set `"show_internal_watermark": true` in `~/.config/yui/config.json` to show
 the OS pretty name, kernel version, Git branch and full commit hash, and
 `I <3 Jamie Paige` at the bottom right of each desktop, above the bottom panel.
+Git information falls back to BuildTool's saved `/etc/libitina-info` metadata
+when it cannot be read from the checkout, such as in built images without `.git`.
 It defaults to false; changing the setting takes effect within a second.
 
 When `shell` is set to `mobile` in `~/.config/yui/config.json`, the YuiHirasawa

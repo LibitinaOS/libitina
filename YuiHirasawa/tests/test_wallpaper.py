@@ -1,8 +1,10 @@
 """Exercise wallpaper cover geometry without a running Wayland compositor."""
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import subprocess
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -85,6 +87,52 @@ class WallpaperTests(unittest.TestCase):
     def test_wallpaper_does_not_request_image_dimensions(self):
         self.assertEqual(self.module.Wallpaper.do_get_preferred_width(self.image), (0, 0))
         self.assertEqual(self.module.Wallpaper.do_get_preferred_height(self.image), (0, 0))
+
+
+class WatermarkTests(unittest.TestCase):
+    def setUp(self):
+        self.module = renderer_module()
+
+    def watermark(self, git_results, metadata):
+        with patch.object(self.module.subprocess, "check_output", side_effect=git_results), \
+                patch.object(self.module.Path, "read_text", return_value=metadata) as read, \
+                patch.object(self.module.platform, "freedesktop_os_release",
+                             return_value={"PRETTY_NAME": "Test Linux"}), \
+                patch.object(self.module.platform, "release", return_value="test-kernel"):
+            result = self.module.internal_watermark_text()
+        return result, read
+
+    def test_live_checkout_takes_precedence(self):
+        result, read = self.watermark(["live-branch\n", "live-commit\n"], "")
+        self.assertEqual(result, "Test Linux\ntest-kernel\nb=live-branch c=live-commit\nI <3 Jamie Paige")
+        read.assert_not_called()
+
+    def test_missing_git_uses_build_metadata(self):
+        metadata = json.dumps({"git_branch": "built-branch", "git_commit": "a" * 40})
+        result, read = self.watermark([FileNotFoundError(), FileNotFoundError()], metadata)
+        self.assertIn(f"b=built-branch c={'a' * 40}", result)
+        read.assert_called_once_with()
+
+    def test_fallback_only_replaces_unavailable_values(self):
+        result, _ = self.watermark(
+            ["live-branch", subprocess.CalledProcessError(128, "git")],
+            '{"git_branch": "built-branch", "git_commit": "built-commit"}')
+        self.assertIn("b=live-branch c=built-commit", result)
+
+    def test_unusable_metadata_keeps_unknown_values(self):
+        for metadata in ("", "{", "[]", "null", "{}",
+                         '{"git_branch": 1, "git_commit": " "}'):
+            with self.subTest(metadata=metadata):
+                result, _ = self.watermark([OSError(), OSError()], metadata)
+                self.assertIn("b=unknown c=unknown", result)
+
+    def test_missing_or_unreadable_metadata_keeps_unknown_values(self):
+        for error in (FileNotFoundError(), PermissionError(), UnicodeDecodeError(
+                "utf-8", b"\xff", 0, 1, "invalid byte")):
+            with self.subTest(error=error), \
+                    patch.object(self.module.Path, "read_text", side_effect=error), \
+                    patch.object(self.module.subprocess, "check_output", side_effect=OSError()):
+                self.assertIn("b=unknown c=unknown", self.module.internal_watermark_text())
 
 
 if __name__ == "__main__":
