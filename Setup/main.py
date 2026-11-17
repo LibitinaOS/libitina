@@ -127,7 +127,23 @@ class SetupWizard(Gtk.Window):
             ('Japanese', 'jp')], self.config['keyboard'])
         self.add_field('Keyboard layout', self.keyboard_combo)
         self.keyboard_test = Gtk.Entry()
+        self._keyboard_phrase_matched = False
+        self.keyboard_test.connect('changed', self.on_keyboard_test_changed)
         self.add_field('Test your keyboard', self.keyboard_test)
+
+    def on_keyboard_test_changed(self, entry):
+        text = entry.get_text().replace(',', '').casefold().strip()
+        matched = text == 'every day i imagine a future where i can be with you'
+        already_matched = self._keyboard_phrase_matched
+        self._keyboard_phrase_matched = matched
+        if matched and not already_matched:
+            dialog = Gtk.MessageDialog(transient_for=self, flags=Gtk.DialogFlags.MODAL,
+                                       message_type=Gtk.MessageType.INFO,
+                                       buttons=Gtk.ButtonsType.OK, text='Just Monika')
+            try:
+                dialog.run()
+            finally:
+                dialog.destroy()
 
     def page_timezone(self):
         self.add_heading('Date and time')
