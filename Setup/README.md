@@ -5,7 +5,16 @@ greeter, and registers the YuiHirasawa session from the installed repository.
 It purges ifupdown so it cannot compete with NetworkManager.
 
 LightDM initially autologins the locked, unprivileged `defaultuser0` account into
-`libitina-oobe`. This runs Labwc with `--session` pointing only at the wizard.
+`libitina-oobe`. This runs Labwc with `--session` pointing at `oobe-client.sh`,
+which starts the standalone `wallpaper.py` background alongside the wizard and
+stops it when the wizard exits. Like swaybg, the background runs as a separate
+Wayland background-layer client, covering each monitor and handling hotplug.
+It shows a solid dark background with Yui's OS, kernel, branch and commit watermark
+at the bottom right, always enabled during setup. Git values fall back to
+BuildTool's `/etc/libitina-info`. It does not load Yui's shell or user settings.
+OOBE's dedicated Labwc config disables the desktop right-click menu.
+To run the background alone inside a Wayland session, use
+`python3 Setup/wallpaper.py`; stop it with Ctrl+C or SIGTERM.
 When the wizard and compositor exit, the session requests the root-owned
 `libitina-setup.service` through a single-command sudo rule. Closing the wizard
 without exporting settings simply returns to login/OOBE.

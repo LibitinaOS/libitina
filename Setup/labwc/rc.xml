@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <mouse>
+    <default />
+    <context name="Root">
+      <!-- Labwc handles desktop clicks even over a background-layer client. -->
+      <mousebind button="Right" action="Press" />
+    </context>
+  </mouse>
+</labwc_config>
