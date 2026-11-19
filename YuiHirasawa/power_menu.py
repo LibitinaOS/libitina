@@ -34,7 +34,15 @@ def create_power_menu(parent, on_success, on_error=None):
 
     menu = Gtk.Menu()
     for label, command, confirm in (
-        ("Lock", ("loginctl", "lock-session"), False),
+        # arranged as:
+        # display label | command | should show warning
+
+        # ("Lock", ("loginctl", "lock-session"), False), # todo: add logind integration to our locker
+        # for now we simply call the locker itself
+        ("Lock", ("python3", "locker.py"), False),
+        # todo: add a log out option
+
+        # power options
         ("Suspend", ("systemctl", "suspend"), True),
         ("Restart", ("systemctl", "reboot"), True),
         ("Power Off", ("systemctl", "poweroff"), True),

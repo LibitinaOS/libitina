@@ -82,7 +82,7 @@ def snapshot(outputs):
         })
     return profiles
 
-
+# todo: warn about the invalid config and delete it, this fixes weird broken behavior in Yui if the config is broken
 def validate(profiles):
     if not isinstance(profiles, list) or not profiles:
         raise ValueError("No monitor configuration to save.")
