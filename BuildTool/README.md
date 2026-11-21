@@ -61,3 +61,29 @@ directory selection when `--work-dir` is omitted. The raw disk defaults to 16 Gi
 QCOW2 to 20 GiB, and the root partition to 10 GiB. Use `--size` to set the
 disk capacity in GiB for either image format. Allow space for both the raw
 staging image and final output during QCOW2 conversion.
+
+## RecoveryOS
+
+Install `squashfs-tools` on the build host, then pass `--recovery`:
+
+```sh
+sudo apt install squashfs-tools
+sudo python3 BuildTool/main.py qcow2 ./libitina.qcow2 --recovery --hostname libitina
+sudo python3 BuildTool/main.py zip ./recovery.zip --recovery --hostname libitina
+```
+
+IMG and QCOW2 builds reserve 2 GiB for a separate RecoveryOS partition. Select
+**Libitina RecoveryOS** from the GRUB menu. The recovery kernel and initramfs
+are stored in the main system's `/boot/recovery` directory. The recovery
+partition comes before `/home`, so `/home` can still expand on a flashed IMG.
+These builds download the Debian base once and copy it locally before installing
+each system's packages.
+
+A ZIP build with `--recovery` contains the standalone RecoveryOS
+`recovery.squashfs`, `vmlinuz`, and `initrd.img`. To boot it with your own
+bootloader, place the SquashFS image on a dedicated partition and boot the
+included kernel and initramfs with `root=PARTUUID=<partition-uuid> rootfstype=squashfs ro`.
+
+RecoveryOS uses the configured hostname and opens Foot in a root labwc
+session. Its SquashFS base is read-only. The live root is writable through a
+RAM-backed overlay, so changes made there disappear on reboot.

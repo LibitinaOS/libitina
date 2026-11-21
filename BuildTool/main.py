@@ -4,7 +4,8 @@
 Linux amd64/arm64 host, root privileges, Debian amd64/arm64 guest, UEFI boot.
 Cross builds require QEMU user emulation registered with binfmt_misc (F flag).
 Host requires: debootstrap, coreutils, mount, util-linux, parted, udev,
-               e2fsprogs, dosfstools, qemu-utils (for qcow2), git, python3.
+               e2fsprogs, dosfstools, qemu-utils (for qcow2), git, python3,
+               squashfs-tools (for --recovery).
 Guest packages (including GRUB) are installed automatically.
 
 WARNING: Builds use loop devices and mount namespaces; run on a trusted Linux host.
@@ -27,6 +28,7 @@ import zipfile
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
+RECOVERY_MIB = 2048
 TARGETS = {
     'amd64': {'grub': 'x86_64-efi', 'efi': 'BOOTX64.EFI', 'binfmt': 'qemu-x86_64'},
     'arm64': {'grub': 'arm64-efi', 'efi': 'BOOTAA64.EFI', 'binfmt': 'qemu-aarch64'},
@@ -106,19 +108,7 @@ def install_libitina(root, output):
                     ignore=ignore, dirs_exist_ok=True)
 
 
-def bootstrap(root, args):
-    # Resolve the source repository independently of the caller's working directory.
-    source = Path(__file__).resolve().parent
-    metadata = {
-        'target_architecture': args.arch,
-        'builder_username': os.environ.get('SUDO_USER') or getpass.getuser(),
-        'builder_hostname': socket.gethostname(),
-        'build_datetime': datetime.now(timezone.utc).isoformat(),
-        'git_commit': run('git', '-C', source, 'rev-parse', 'HEAD',
-                          capture=True).stdout.strip(),
-        'git_branch': run('git', '-C', source, 'rev-parse', '--abbrev-ref', 'HEAD',
-                          capture=True).stdout.strip(),
-    }
+def bootstrap_base(root, args):
     foreign = cross_build(args.arch)
     options = ['--foreign'] if foreign else []
     run('debootstrap', f'--arch={args.arch}', '--variant=minbase', *options,
@@ -132,23 +122,45 @@ def bootstrap(root, args):
             raise RuntimeError('QEMU binfmt could not execute the target /bin/true') from exc
         with chroot_mounts(root), inhibit_services(root):
             run('chroot', root, '/debootstrap/debootstrap', '--second-stage')
-    install_libitina(root, args.output)
-    write(root, '/etc/libitina-info', json.dumps(metadata, indent=2) + '\n', 0o644)
     write(root, '/etc/hostname', args.hostname + '\n')
     write(root, '/etc/hosts', f'127.0.0.1 localhost\n127.0.1.1 {args.hostname}\n')
     write(root, '/etc/apt/sources.list',
           f'deb {args.mirror} {args.release} main\n'
           f'deb {args.mirror} {args.release}-updates main\n'
           f'deb http://security.debian.org/debian-security {args.release}-security main\n')
-    # NetworkManager manages guest networking; do not configure ifupdown.
-
     write(root, '/etc/resolv.conf', 'nameserver 1.1.1.1\n')
+
+
+def configure_system(root, args):
+    install_build_metadata(root, args)
     write(root, '/etc/fstab',
           'LABEL=DEBROOT / ext4 defaults 0 1\n'
           'LABEL=DEBHOME /home ext4 defaults,nofail 0 2\n'
           'LABEL=DEBEFI /boot/efi vfat umask=0077 0 1\n')
     (root / 'home').mkdir(exist_ok=True)
     (root / 'boot/efi').mkdir(parents=True, exist_ok=True)
+
+
+def bootstrap(root, args):
+    bootstrap_base(root, args)
+    configure_system(root, args)
+
+
+def install_build_metadata(root, args):
+    # Resolve the source repository independently of the caller's working directory.
+    source = Path(__file__).resolve().parent
+    metadata = {
+        'target_architecture': args.arch,
+        'builder_username': os.environ.get('SUDO_USER') or getpass.getuser(),
+        'builder_hostname': socket.gethostname(),
+        'build_datetime': datetime.now(timezone.utc).isoformat(),
+        'git_commit': run('git', '-C', source, 'rev-parse', 'HEAD',
+                          capture=True).stdout.strip(),
+        'git_branch': run('git', '-C', source, 'rev-parse', '--abbrev-ref', 'HEAD',
+                          capture=True).stdout.strip(),
+    }
+    install_libitina(root, args.output)
+    write(root, '/etc/libitina-info', json.dumps(metadata, indent=2) + '\n', 0o644)
 
 
 def mounts_under(destination):
@@ -369,7 +381,82 @@ def configure_oobe(root):
     run('chroot', root, 'systemctl', 'enable', 'libitina-oobe-recovery.service')
 
 
-def install_expand_service(root):
+def build_recovery(work, args, *, system_root=None):
+    root = work / 'recovery-root'
+    root.mkdir()
+    artifacts = work / 'recovery'
+    artifacts.mkdir()
+    bootstrap_base(root, args)
+    if system_root is not None:
+        # Preserve ownership, links, device nodes and extended attributes.
+        run('cp', '-a', f'{root}/.', system_root)
+    write(root, '/etc/fstab', '')
+    write(root, '/etc/initramfs-tools/modules', 'squashfs\noverlay\n')
+    write(root, '/etc/initramfs-tools/scripts/local-bottom/recovery-overlay', '''#!/bin/sh
+case "${1:-}" in
+    prereqs) exit 0 ;;
+esac
+. /scripts/functions
+
+# The initramfs moves /run into the new root before handing off to systemd.
+ram=/run/recovery-overlay
+setup_overlay() {
+    mkdir -p "$ram" &&
+    mount -t tmpfs -o mode=0700 tmpfs "$ram" &&
+    mkdir "$ram/base" "$ram/upper" "$ram/work" &&
+    mount -n -o move "$rootmnt" "$ram/base" &&
+    mount -t overlay -o "lowerdir=$ram/base,upperdir=$ram/upper,workdir=$ram/work" \\
+        overlay "$rootmnt"
+}
+if ! setup_overlay; then
+    panic "Could not mount the RecoveryOS RAM overlay"
+    exit 1
+fi
+''', 0o755)
+    write(root, '/etc/systemd/system/recovery-desktop.service', '''[Unit]
+Description=RecoveryOS desktop
+After=systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
+[Service]
+User=root
+WorkingDirectory=/root
+RuntimeDirectory=recovery-desktop
+RuntimeDirectoryMode=0700
+Environment=HOME=/root XDG_RUNTIME_DIR=/run/recovery-desktop LIBSEAT_BACKEND=seatd
+ExecStart=/usr/bin/seatd-launch -- /usr/bin/dbus-run-session -- /usr/bin/labwc -s /usr/bin/foot
+StandardInput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target
+''')
+    with chroot_mounts(root), inhibit_services(root):
+        run('chroot', root, 'apt-get', 'update')
+        run('chroot', root, 'apt-get', 'install', '-y', '--no-install-recommends',
+            'systemd-sysv', 'udev', 'dbus', 'seatd', 'labwc', 'foot', 'fonts-dejavu',
+            'libgl1-mesa-dri', 'initramfs-tools', 'python3', f'linux-image-{args.arch}')
+        run('chroot', root, 'systemctl', 'mask', 'getty@tty1.service', 'seatd.service')
+        run('chroot', root, 'systemctl', 'enable', 'recovery-desktop.service')
+        run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
+        run('chroot', root, 'apt-get', 'clean')
+        denura = Path(__file__).resolve().parents[1] / 'DeNura/main.py'
+        run('chroot', root, '/usr/bin/python3', '-', input=denura.read_text(encoding='utf-8'))
+    write(root, '/etc/issue', 'Libitina RecoveryOS\n')
+    write(root, '/etc/machine-id', '')
+    kernel, = (root / 'boot').glob('vmlinuz-*')
+    initrd = kernel.with_name(kernel.name.replace('vmlinuz-', 'initrd.img-', 1))
+    shutil.copyfile(kernel, artifacts / 'vmlinuz')
+    shutil.copyfile(initrd, artifacts / 'initrd.img')
+    run('mksquashfs', root, artifacts / 'recovery.squashfs', '-noappend', '-e', 'boot')
+    return artifacts
+
+
+def install_expand_service(root, partition=3):
     write(root, '/usr/local/sbin/expand-home-partition', '''#!/bin/sh
 set -eu
 # Locate the partition by its filesystem label, not a hard-coded /dev name.
@@ -379,12 +466,12 @@ case "$part" in
   /dev/*[0-9]) disk=${part%[0-9]*}; number=${part##*[!0-9]} ;;
   *) echo "Cannot parse partition path: $part" >&2; exit 1 ;;
 esac
-[ "$number" = 3 ] || { echo "Expected partition 3" >&2; exit 1; }
+[ "$number" = @PARTITION@ ] || { echo "Expected partition @PARTITION@" >&2; exit 1; }
 # growpart returns nonzero when no growth is needed on some versions.
 growpart "$disk" "$number" || true
 resize2fs "$part"
 touch /var/lib/home-partition-expanded
-''', 0o755)
+'''.replace('@PARTITION@', str(partition)), 0o755)
     write(root, '/etc/systemd/system/expand-home.service',
           '[Unit]\nDescription=Expand /home partition to fill disk\n'
           'After=local-fs.target\nConditionPathExists=!/var/lib/home-partition-expanded\n'
@@ -414,15 +501,46 @@ def make_zip(root, output):
                     z.write(p, rel + '/')
 
 
-def create_raw(path, size_gib, root_gib):
-    # 512 MiB ESP, fixed root, remaining capacity for home.
+def create_raw(path, size_gib, root_gib, recovery=False):
+    # Keep /home last so it can grow when a raw image is flashed to a larger disk.
     with open(path, 'wb') as f:
         f.truncate(size_gib * GIB)
     run('parted', '-s', path, 'mklabel', 'gpt')
     run('parted', '-s', path, 'mkpart', 'ESP', 'fat32', '1MiB', '513MiB')
     run('parted', '-s', path, 'set', '1', 'esp', 'on')
-    run('parted', '-s', path, 'mkpart', 'root', 'ext4', '513MiB', f'{513 + root_gib * 1024}MiB')
-    run('parted', '-s', path, 'mkpart', 'home', 'ext4', f'{513 + root_gib * 1024}MiB', '100%')
+    root_end = 513 + root_gib * 1024
+    run('parted', '-s', path, 'mkpart', 'root', 'ext4', '513MiB', f'{root_end}MiB')
+    home_start = root_end
+    if recovery:
+        home_start += RECOVERY_MIB
+        run('parted', '-s', path, 'mkpart', 'recovery', f'{root_end}MiB', f'{home_start}MiB')
+    run('parted', '-s', path, 'mkpart', 'home', 'ext4', f'{home_start}MiB', '100%')
+
+
+def install_recovery(root, artifacts, partition, system_partition):
+    image = artifacts / 'recovery.squashfs'
+    if image.stat().st_size > RECOVERY_MIB * MIB:
+        raise RuntimeError('RecoveryOS does not fit in the 2 GiB recovery partition')
+    run('dd', f'if={image}', f'of={partition}', 'bs=4M', 'conv=fsync')
+    recovery_uuid = run('blkid', '-s', 'PARTUUID', '-o', 'value', partition,
+                        capture=True).stdout.strip()
+    system_uuid = run('blkid', '-s', 'UUID', '-o', 'value', system_partition,
+                      capture=True).stdout.strip()
+    boot = root / 'boot/recovery'
+    boot.mkdir()
+    for name in ('vmlinuz', 'initrd.img'):
+        shutil.copyfile(artifacts / name, boot / name)
+    write(root, '/etc/default/grub.d/90-recovery.cfg',
+          'GRUB_TIMEOUT_STYLE=menu\nGRUB_TIMEOUT=5\n')
+    write(root, '/etc/grub.d/41_recovery', f"""#!/bin/sh
+cat <<'EOF'
+menuentry 'Libitina RecoveryOS' --id libitina-recovery {{
+    search --no-floppy --fs-uuid --set=root {system_uuid}
+    linux /boot/recovery/vmlinuz root=PARTUUID={recovery_uuid} rootfstype=squashfs ro
+    initrd /boot/recovery/initrd.img
+}}
+EOF
+""", 0o755)
 
 
 def install_bootloader(root, arch):
@@ -438,24 +556,34 @@ def install_bootloader(root, arch):
 
 
 def build_disk(root, args, raw, expand):
-    create_raw(raw, args.size, args.root_size)
+    create_raw(raw, args.size, args.root_size, args.recovery)
     loop = run('losetup', '--find', '--show', '--partscan', raw, capture=True).stdout.strip()
     try:
         run('udevadm', 'settle')
-        p1, p2, p3 = (Path(f'{loop}p{i}') for i in (1, 2, 3))
-        for p in (p1, p2, p3):
+        home_number = 4 if args.recovery else 3
+        partitions = [Path(f'{loop}p{i}') for i in range(1, home_number + 1)]
+        for p in partitions:
             if not p.exists():
                 raise RuntimeError(f'Loop partition not found: {p}')
+        p1, p2 = partitions[:2]
+        home = partitions[-1]
         run('mkfs.vfat', '-F', '32', '-n', 'DEBEFI', p1)
         run('mkfs.ext4', '-F', '-L', 'DEBROOT', p2)
-        run('mkfs.ext4', '-F', '-L', 'DEBHOME', p3)
+        run('mkfs.ext4', '-F', '-L', 'DEBHOME', home)
         with mounted(p2, root):
+            recovery = (build_recovery(root.parent, args, system_root=root)
+                        if args.recovery else None)
             with mounted(p1, root / 'boot/efi'):
-                with mounted(p3, root / 'home'):
-                    bootstrap(root, args)
+                with mounted(home, root / 'home'):
+                    if recovery is None:
+                        bootstrap(root, args)
+                    else:
+                        configure_system(root, args)
                     install_guest(root, args, True)
                     if expand:
-                        install_expand_service(root)
+                        install_expand_service(root, home_number)
+                    if recovery:
+                        install_recovery(root, recovery, partitions[2], p2)
                     install_bootloader(root, args.arch)
     finally:
         run('losetup', '-d', loop)
@@ -483,6 +611,8 @@ def main():
                         help='disk image size in GiB (default 16 for img, 20 for qcow2)')
     parser.add_argument('--root-size', type=int, default=10,
                         help='system partition size in GiB (default 10)')
+    parser.add_argument('--recovery', action='store_true',
+                        help='build a RecoveryOS ZIP or add a bootable recovery partition to a disk')
     parser.add_argument('--root-password', default=None,
                         help='INSECURE: visible in process arguments; prefer offline setup')
     parser.add_argument('--work-dir', type=Path,
@@ -502,13 +632,19 @@ def main():
                             *sys.argv[1:], '--_mount-namespace'])
     if args.size is None:
         args.size = 20 if args.format == 'qcow2' else 16
-    if args.size * 1024 <= 513 + args.root_size * 1024 + 512:
-        parser.error('image too small: need ESP + root + at least 512 MiB for /home')
+    recovery_mib = RECOVERY_MIB if args.recovery else 0
+    if args.format != 'zip' and args.size * 1024 <= 513 + args.root_size * 1024 + recovery_mib + 512:
+        extra = ' + 2 GiB for RecoveryOS' if args.recovery else ''
+        parser.error(f'image too small: need ESP + root{extra} + at least 512 MiB for /home')
     commands = ['debootstrap', 'chroot', 'mount', 'umount', 'git', 'findmnt']
     if args.format != 'zip':
         commands += ['parted', 'losetup', 'udevadm', 'mkfs.vfat', 'mkfs.ext4']
     if args.format == 'qcow2':
         commands.append('qemu-img')
+    if args.recovery:
+        commands.append('mksquashfs')
+        if args.format != 'zip':
+            commands += ['cp', 'dd', 'blkid']
     for command in commands:
         require(command)
     require_cross_emulation(args.arch)
@@ -525,7 +661,9 @@ def main():
     with build_directory(work_dir) as temp:
         root = Path(temp) / 'root'
         root.mkdir()
-        if args.format == 'zip':
+        if args.format == 'zip' and args.recovery:
+            make_zip(build_recovery(temp, args), args.output)
+        elif args.format == 'zip':
             bootstrap(root, args)
             install_guest(root, args, False)
             make_zip(root, args.output)
