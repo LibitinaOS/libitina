@@ -58,5 +58,6 @@ Build storage defaults to `/var/tmp`, ignoring TMPDIR. Select disk-backed storag
 with `--work-dir PATH`; `/tmp` and RAM filesystems are rejected for storage and
 output unless `--force-tmp` is explicit. That override uses normal Python temporary
 directory selection when `--work-dir` is omitted. The raw disk defaults to 16 GiB,
-QCOW2 to 20 GiB, and the root partition to 10 GiB. Allow space for both the raw
+QCOW2 to 20 GiB, and the root partition to 10 GiB. Use `--size` to set the
+disk capacity in GiB for either image format. Allow space for both the raw
 staging image and final output during QCOW2 conversion.

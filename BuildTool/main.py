@@ -479,8 +479,8 @@ def main():
     parser.add_argument('--release', default='trixie')
     parser.add_argument('--mirror', default='http://deb.debian.org/debian')
     parser.add_argument('--hostname', default='FuckDavidBaszucki')
-    parser.add_argument('--size', type=int, default=16,
-                        help='raw image size in GiB (default 16); qcow2 always 20')
+    parser.add_argument('--size', type=int,
+                        help='disk image size in GiB (default 16 for img, 20 for qcow2)')
     parser.add_argument('--root-size', type=int, default=10,
                         help='system partition size in GiB (default 10)')
     parser.add_argument('--root-password', default=None,
@@ -500,8 +500,8 @@ def main():
         os.execvp('unshare', ['unshare', '--mount', '--propagation', 'private',
                             sys.executable, str(Path(__file__).resolve()),
                             *sys.argv[1:], '--_mount-namespace'])
-    if args.format == 'qcow2':
-        args.size = 20
+    if args.size is None:
+        args.size = 20 if args.format == 'qcow2' else 16
     if args.size * 1024 <= 513 + args.root_size * 1024 + 512:
         parser.error('image too small: need ESP + root + at least 512 MiB for /home')
     commands = ['debootstrap', 'chroot', 'mount', 'umount', 'git', 'findmnt']
