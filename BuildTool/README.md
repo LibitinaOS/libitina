@@ -62,6 +62,47 @@ QCOW2 to 20 GiB, and the root partition to 10 GiB. Use `--size` to set the
 disk capacity in GiB for either image format. Allow space for both the raw
 staging image and final output during QCOW2 conversion.
 
+## Semi-immutable disk images
+
+Pass `--rootless` with `img` or `qcow2` to mount the system partition read-only and
+use a persistent OverlayFS root. Install `fdisk` on a Debian build host for its
+`sfdisk` command.
+
+```sh
+sudo apt install fdisk
+sudo python3 BuildTool/main.py qcow2 ./libitina-rootless.qcow2 --rootless
+```
+
+At boot, the initramfs mounts the home partition and uses it for both the
+overlay's writable layer and `/home`. System changes such as edits to `/etc`
+and files in `/home` survive reboot. A fresh home volume restores the initial
+setup account and launches first-boot setup. GRUB loads the kernel and initramfs
+from the read-only system partition, so boot artifact updates require updating
+the base image offline. `--rootless` can be combined with `--recovery`.
+
+### Offline factory reset
+
+Resetting the home partition erases all user files and system changes stored
+there. Boot another Linux system with `systemd-repart` and `mkfs.ext4` installed.
+Identify the Libitina disk with `lsblk`, then mount its system partition (the
+second partition) read-only at `/mnt/libitina`. Copy the reset definition and
+unmount all partitions on the Libitina disk before running `systemd-repart`.
+Substitute the whole Libitina disk for `/dev/sdX` below.
+
+```sh
+repart_defs=$(mktemp -d)
+cp /mnt/libitina/usr/lib/libitina/repart.d/10-home.conf "$repart_defs/"
+sudo umount /mnt/libitina
+sudo systemd-repart --definitions="$repart_defs" --factory-reset=yes /dev/sdX
+```
+
+Check that the preview targets only `DEBHOME`, then apply the reset. The system,
+EFI, and optional RecoveryOS partitions are retained.
+
+```sh
+sudo systemd-repart --definitions="$repart_defs" --factory-reset=yes --dry-run=no /dev/sdX
+```
+
 ## RecoveryOS
 
 Install `squashfs-tools` on the build host, then pass `--recovery`:

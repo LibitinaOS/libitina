@@ -5,7 +5,7 @@ Linux amd64/arm64 host, root privileges, Debian amd64/arm64 guest, UEFI boot.
 Cross builds require QEMU user emulation registered with binfmt_misc (F flag).
 Host requires: debootstrap, coreutils, mount, util-linux, parted, udev,
                e2fsprogs, dosfstools, qemu-utils (for qcow2), git, python3,
-               squashfs-tools (for --recovery).
+               squashfs-tools (for --recovery), sfdisk (for --rootless).
 Guest packages (including GRUB) are installed automatically.
 
 WARNING: Builds use loop devices and mount namespaces; run on a trusted Linux host.
@@ -29,6 +29,7 @@ import zipfile
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 RECOVERY_MIB = 2048
+ROOTLESS_HOME_TYPE = '5efce933-a09b-456d-9a5c-3885f4120fde'
 TARGETS = {
     'amd64': {'grub': 'x86_64-efi', 'efi': 'BOOTX64.EFI', 'binfmt': 'qemu-x86_64'},
     'arm64': {'grub': 'arm64-efi', 'efi': 'BOOTAA64.EFI', 'binfmt': 'qemu-aarch64'},
@@ -456,11 +457,73 @@ WantedBy=graphical.target
     return artifacts
 
 
-def install_expand_service(root, partition=3):
+def install_rootless(root, home_uuid, efi_uuid):
+    write(root, '/etc/fstab',
+          '/run/libitina-rootless/state/home /home none bind 0 0\n'
+          f'PARTUUID={efi_uuid} /boot/efi vfat ro,umask=0077 0 0\n')
+    write(root, '/usr/lib/libitina/repart.d/10-home.conf',
+          f'[Partition]\nType={ROOTLESS_HOME_TYPE}\nLabel=DEBHOME\nUUID={home_uuid}\n'
+          'SizeMinBytes=512M\nFormat=ext4\nFactoryReset=yes\n')
+    write(root, '/etc/initramfs-tools/conf.d/libitina-rootless', 'BOOT=libitina-rootless\n')
+    write(root, '/etc/initramfs-tools/hooks/libitina-rootless', '''#!/bin/sh
+set -e
+[ "${1:-}" != prereqs ] || exit 0
+. /usr/share/initramfs-tools/hook-functions
+
+force_load overlay
+copy_exec /usr/bin/cp /usr/lib/libitina/initramfs/cp
+copy_exec /sbin/fsck
+copy_exec /sbin/fsck.ext4
+copy_exec /sbin/logsave
+''', 0o755)
+    write(root, '/etc/initramfs-tools/scripts/libitina-rootless', '''#!/bin/sh
+# initramfs-tools sources this after its standard local boot functions.
+mountroot() {
+    # Prevent both fsck writes and ext4 journal replay on the system partition.
+    readonly=y fastboot=y ROOTFLAGS='-o noload' local_mount_root
+    local_device_setup 'PARTUUID=@HOME_UUID@' 'Libitina home partition'
+    checkfs "$DEV" home ext4
+    if ! mount_root_overlay "$DEV"; then
+        # Leaving the rescue shell must never boot into a partially mounted root.
+        while :; do
+            panic 'Could not mount the Libitina root overlay. Repair the home volume and reboot.'
+        done
+    fi
+}
+
+mount_root_overlay() {
+    # The initramfs moves /run and its mounts into the new root at handoff.
+    local runtime=/run/libitina-rootless
+    local state=$runtime/state
+    local base=$runtime/base
+    mkdir -m 0700 "$runtime" && mkdir "$state" "$base" &&
+        mount -t ext4 -o rw "$1" "$state" &&
+        mkdir -p "$state/upper" "$state/work" || return 1
+
+    # Seed the setup account once per fresh home filesystem. Rename the finished
+    # directory into place so an interrupted copy can resume on the next boot.
+    if [ ! -d "$state/home" ]; then
+        mkdir -p "$state/home.new" &&
+            /usr/lib/libitina/initramfs/cp -a "$rootmnt/home/." "$state/home.new/" &&
+            sync &&
+            mv "$state/home.new" "$state/home" || return 1
+    fi
+
+    mount -n -o move "$rootmnt" "$base" &&
+        mount -t overlay -o "lowerdir=$base,upperdir=$state/upper,workdir=$state/work" \\
+            overlay "$rootmnt" &&
+        mount -n -o bind "$state/home" "$rootmnt/home"
+}
+'''.replace('@HOME_UUID@', home_uuid), 0o755)
+    with chroot_mounts(root):
+        run('chroot', root, 'update-initramfs', '-u', '-k', 'all')
+
+
+def install_expand_service(root, partition=3, home_device='/dev/disk/by-label/DEBHOME'):
     write(root, '/usr/local/sbin/expand-home-partition', '''#!/bin/sh
 set -eu
-# Locate the partition by its filesystem label, not a hard-coded /dev name.
-part=$(readlink -f /dev/disk/by-label/DEBHOME)
+# Resolve the partition on the current boot device.
+part=$(readlink -f '@HOME_DEVICE@')
 case "$part" in
   /dev/nvme*n*p[0-9]*|/dev/mmcblk*p[0-9]*) disk=${part%p[0-9]*}; number=${part##*p} ;;
   /dev/*[0-9]) disk=${part%[0-9]*}; number=${part##*[!0-9]} ;;
@@ -471,7 +534,7 @@ esac
 growpart "$disk" "$number" || true
 resize2fs "$part"
 touch /var/lib/home-partition-expanded
-'''.replace('@PARTITION@', str(partition)), 0o755)
+'''.replace('@PARTITION@', str(partition)).replace('@HOME_DEVICE@', home_device), 0o755)
     write(root, '/etc/systemd/system/expand-home.service',
           '[Unit]\nDescription=Expand /home partition to fill disk\n'
           'After=local-fs.target\nConditionPathExists=!/var/lib/home-partition-expanded\n'
@@ -556,11 +619,13 @@ def install_bootloader(root, arch):
 
 
 def build_disk(root, args, raw, expand):
+    home_number = 4 if args.recovery else 3
     create_raw(raw, args.size, args.root_size, args.recovery)
+    if args.rootless:
+        run('sfdisk', '--part-type', raw, home_number, ROOTLESS_HOME_TYPE)
     loop = run('losetup', '--find', '--show', '--partscan', raw, capture=True).stdout.strip()
     try:
         run('udevadm', 'settle')
-        home_number = 4 if args.recovery else 3
         partitions = [Path(f'{loop}p{i}') for i in range(1, home_number + 1)]
         for p in partitions:
             if not p.exists():
@@ -574,14 +639,22 @@ def build_disk(root, args, raw, expand):
             recovery = (build_recovery(root.parent, args, system_root=root)
                         if args.recovery else None)
             with mounted(p1, root / 'boot/efi'):
-                with mounted(home, root / 'home'):
+                # Preserve the factory home on the lower layer for first boot and reset.
+                with (contextlib.nullcontext() if args.rootless else mounted(home, root / 'home')):
                     if recovery is None:
                         bootstrap(root, args)
                     else:
                         configure_system(root, args)
                     install_guest(root, args, True)
+                    home_device = '/dev/disk/by-label/DEBHOME'
+                    if args.rootless:
+                        home_uuid, efi_uuid = (
+                            run('blkid', '-s', 'PARTUUID', '-o', 'value', p,
+                                capture=True).stdout.strip() for p in (home, p1))
+                        install_rootless(root, home_uuid, efi_uuid)
+                        home_device = f'/dev/disk/by-partuuid/{home_uuid}'
                     if expand:
-                        install_expand_service(root, home_number)
+                        install_expand_service(root, home_number, home_device)
                     if recovery:
                         install_recovery(root, recovery, partitions[2], p2)
                     install_bootloader(root, args.arch)
@@ -613,6 +686,8 @@ def main():
                         help='system partition size in GiB (default 10)')
     parser.add_argument('--recovery', action='store_true',
                         help='build a RecoveryOS ZIP or add a bootable recovery partition to a disk')
+    parser.add_argument('--rootless', action='store_true',
+                        help='use a read-only system partition with a persistent /home-backed overlay (img and qcow2)')
     parser.add_argument('--root-password', default=None,
                         help='INSECURE: visible in process arguments; prefer offline setup')
     parser.add_argument('--work-dir', type=Path,
@@ -621,6 +696,8 @@ def main():
                         help='allow /tmp and RAM filesystems; default to TMPDIR when --work-dir is omitted')
     parser.add_argument('--_mount-namespace', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.rootless and args.format == 'zip':
+        parser.error('--rootless requires an img or qcow2 disk image')
     if os.geteuid() != 0:
         parser.error('must run as root on Linux')
     if sys.platform != 'linux':
@@ -639,12 +716,16 @@ def main():
     commands = ['debootstrap', 'chroot', 'mount', 'umount', 'git', 'findmnt']
     if args.format != 'zip':
         commands += ['parted', 'losetup', 'udevadm', 'mkfs.vfat', 'mkfs.ext4']
+    if args.rootless:
+        commands.append('sfdisk')
+    if args.format != 'zip' and (args.rootless or args.recovery):
+        commands.append('blkid')
     if args.format == 'qcow2':
         commands.append('qemu-img')
     if args.recovery:
         commands.append('mksquashfs')
         if args.format != 'zip':
-            commands += ['cp', 'dd', 'blkid']
+            commands += ['cp', 'dd']
     for command in commands:
         require(command)
     require_cross_emulation(args.arch)
