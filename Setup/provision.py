@@ -70,7 +70,7 @@ def validate(data):
     if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', data['username']) or data['username'] in {'root', 'defaultuser0'}:
         raise ValueError('Invalid or reserved username')
     # todo: these should not be the same check, what does the password have to do with the full name?
-    if len(data['password']) < 8 or ':' in data['fullname']:
+    if len(data['password']) < 3 or ':' in data['fullname']:
         raise ValueError('Invalid password or full name')
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', data['hostname'], re.IGNORECASE):
         raise ValueError('Invalid hostname')

@@ -312,8 +312,8 @@ class SetupWizard(Gtk.Window):
                     or username in {'root', 'defaultuser0'}):
                 self.show_error('Enter a lowercase username of at most 32 characters (root and defaultuser0 are reserved).')
                 return False
-            if len(password) < 8:
-                self.show_error('Password must be at least 8 characters.')
+            if len(password) < 3:
+                self.show_error('Password must be at least 3 characters.')
                 return False
             if password != self.confirm_entry.get_text():
                 self.show_error('Passwords do not match.')
