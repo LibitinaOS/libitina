@@ -62,6 +62,49 @@ QCOW2 to 20 GiB, and the root partition to 10 GiB. Use `--size` to set the
 disk capacity in GiB for either image format. Allow space for both the raw
 staging image and final output during QCOW2 conversion.
 
+## Holo gaming images
+
+Pass `--holo` to install Steam and boot to the LightDM session picker. Select
+a session and sign in as `steamos` with the default password `gaben`.
+Add `--holo-autologin` to go straight into the **Libitina Holo** session.
+That session tries embedded Gamescope first and uses Labwc if Gamescope is
+unavailable or exits with an error. Debian Trixie builds get Gamescope from
+`trixie-backports`.
+
+```sh
+sudo python3 BuildTool/main.py img ./libitina-holo-amd64.img --holo
+sudo python3 BuildTool/main.py img ./libitina-holo-arm64.img --holo --arch arm64
+```
+
+The build prepares `/home/steamos/.local/share/Steam` and `~/.steam` links
+owned by `steamos`. The amd64 build installs Debian's Steam launcher and
+stages Valve's Steam bootstrap. The arm64 build stages Valve's native client
+from the Steam Deck public beta. All Steam sessions use
+`-steamdeck -steamos3 -gamepadui -clientbeta steamdeck_publicbeta`. Steam can
+download updates and runtimes on first launch, and players sign in to their
+own Steam accounts.
+
+### Troubleshooting a black screen
+
+LightDM offers Gamescope and Labwc sessions with the default CEF settings,
+forced GPU acceleration, X11 via Ozone, ANGLE Vulkan, the CEF sandbox disabled,
+or all four overrides combined. **Libitina Holo (Terminal)** opens a terminal
+without starting Steam.
+
+Press **Ctrl+Alt+F2** at a black screen and sign in as `steamos` with `gaben`.
+Each launcher writes stdout and stderr to a session-specific file under
+`~/.local/state/libitina/holo/` by default and retains the previous launch as
+`.log.previous`. Steam's own logs are under `~/.local/share/Steam/logs/`.
+Run `ls -lt ~/.local/state/libitina/holo/` in the terminal to find the most
+recent session. SSH login for `steamos` uses a public key from
+`~/.ssh/authorized_keys`.
+
+Use amd64 for Steam Deck and Steam Machine development and arm64 for Steam
+Frame development. These are generic UEFI images. Device boot, Frame VR
+integration, and game compatibility still need hardware validation. Use a disk
+image to preserve ownership or restore ownership from the guest's account
+database after extracting a rootfs ZIP.
+
 ## Semi-immutable disk images
 
 Pass `--rootless` with `img` or `qcow2` to mount the system partition read-only and
@@ -76,7 +119,8 @@ sudo python3 BuildTool/main.py qcow2 ./libitina-rootless.qcow2 --rootless
 At boot, the initramfs mounts the home partition and uses it for both the
 overlay's writable layer and `/home`. System changes such as edits to `/etc`
 and files in `/home` survive reboot. A fresh home volume restores the initial
-setup account and launches first-boot setup. GRUB loads the kernel and initramfs
+setup account and launches first-boot setup. With `--holo`, it restores the
+`steamos` home and opens the Holo login screen. GRUB loads the kernel and initramfs
 from the read-only system partition, so boot artifact updates require updating
 the base image offline. `--rootless` can be combined with `--recovery`.
 

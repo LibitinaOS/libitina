@@ -14,6 +14,7 @@ import argparse
 import contextlib
 from datetime import datetime, timezone
 import getpass
+import hashlib
 import json
 import os
 import platform
@@ -30,6 +31,7 @@ GIB = 1024 ** 3
 MIB = 1024 ** 2
 RECOVERY_MIB = 2048
 ROOTLESS_HOME_TYPE = '5efce933-a09b-456d-9a5c-3885f4120fde'
+STEAM_CLIENT_BETA = 'steamdeck_publicbeta'
 TARGETS = {
     'amd64': {'grub': 'x86_64-efi', 'efi': 'BOOTX64.EFI', 'binfmt': 'qemu-x86_64'},
     'arm64': {'grub': 'arm64-efi', 'efi': 'BOOTAA64.EFI', 'binfmt': 'qemu-aarch64'},
@@ -125,11 +127,18 @@ def bootstrap_base(root, args):
             run('chroot', root, '/debootstrap/debootstrap', '--second-stage')
     write(root, '/etc/hostname', args.hostname + '\n')
     write(root, '/etc/hosts', f'127.0.0.1 localhost\n127.0.1.1 {args.hostname}\n')
-    write(root, '/etc/apt/sources.list',
-          f'deb {args.mirror} {args.release} main\n'
-          f'deb {args.mirror} {args.release}-updates main\n'
-          f'deb http://security.debian.org/debian-security {args.release}-security main\n')
+    configure_apt_sources(root, args)
     write(root, '/etc/resolv.conf', 'nameserver 1.1.1.1\n')
+
+
+def configure_apt_sources(root, args, *, holo=False):
+    components = 'main contrib non-free-firmware' if holo else 'main'
+    sources = (f'deb {args.mirror} {args.release} {components}\n'
+               f'deb {args.mirror} {args.release}-updates {components}\n'
+               f'deb http://security.debian.org/debian-security {args.release}-security {components}\n')
+    if holo and args.release == 'trixie':
+        sources += f'deb {args.mirror} trixie-backports main contrib\n'
+    write(root, '/etc/apt/sources.list', sources)
 
 
 def configure_system(root, args):
@@ -268,6 +277,7 @@ def chroot_mounts(root):
 
 
 def install_guest(root, args, bootable):
+    holo = getattr(args, 'holo', False)
     packages = ['systemd-sysv', 'libpam-systemd', 'tzdata', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd',
@@ -277,6 +287,10 @@ def install_guest(root, args, bootable):
         packages += [f'linux-image-{args.arch}', f'grub-efi-{args.arch}-bin',
                      'grub-common', 'grub2-common', 'e2fsprogs', 'parted', 'cloud-guest-utils']
     with chroot_mounts(root), inhibit_services(root):
+        if holo:
+            configure_apt_sources(root, args, holo=True)
+            if args.arch == 'amd64':
+                run('chroot', root, 'dpkg', '--add-architecture', 'i386')
         run('chroot', root, 'apt-get', 'update')
         run('chroot', root, 'env', 'DEBIAN_FRONTEND=noninteractive',
             'apt-get', 'install', '-y', '--no-install-recommends', *packages)
@@ -288,11 +302,14 @@ def install_guest(root, args, bootable):
             'DEBIAN_FRONTEND=noninteractive',
             'bash', '/usr/share/libitina/YuiHirasawa/install-debian.sh')
         verify_guest_commands(root, bootable)
-        run('chroot', root, 'apt-get', 'clean')
         install_desktop_appearance(root)
         run('chroot', root, '/usr/bin/python3',
             '/usr/share/libitina/Applications/install.py', '--system')
-        configure_oobe(root)
+        if holo:
+            configure_holo(root, args.arch, autologin=args.holo_autologin)
+        else:
+            configure_oobe(root)
+        run('chroot', root, 'apt-get', 'clean')
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
         # Passwordless root is not enabled. Set a password via --root-password.
@@ -346,6 +363,184 @@ def install_desktop_appearance(root):
           "[org.gnome.desktop.interface]\ngtk-theme='DeletescapeUi'\ncolor-scheme='default'\n"
           f"font-name='{interface_font}'\n")
     run('chroot', root, 'glib-compile-schemas', '/usr/share/glib-2.0/schemas')
+
+
+def seed_holo_steam(root, arch):
+    steam = '/home/steamos/.local/share/Steam'
+    links = '/home/steamos/.steam'
+    as_steamos = ('chroot', root, 'runuser', '-u', 'steamos', '--')
+    curl = ('curl', '--fail', '--silent', '--show-error', '--location', '--retry', '3')
+    run(*as_steamos, 'mkdir', '-p', steam, links)
+    with tempfile.TemporaryDirectory(prefix='steam-', dir=root / 'tmp') as directory:
+        staging = f'/tmp/{Path(directory).name}'
+        run('chroot', root, 'chown', 'steamos:steamos', staging)
+        if arch == 'amd64':
+            run(*as_steamos, *curl, '-o', f'{staging}/steam.deb',
+                'https://repo.steampowered.com/steam/archive/stable/steam_latest.deb')
+            run(*as_steamos, 'dpkg-deb', '--extract', f'{staging}/steam.deb', staging)
+            bootstrap = f'{staging}/usr/lib/steam/bootstraplinux_ubuntu12_32.tar.xz'
+            run(*as_steamos, 'cp', bootstrap, f'{steam}/bootstrap.tar.xz')
+            run(*as_steamos, 'tar', '-xf', f'{steam}/bootstrap.tar.xz', '-C', steam)
+            run(*as_steamos, 'test', '-x', f'{steam}/steam.sh')
+        else:
+            cdn = 'https://client-update.steamstatic.com'
+            manifest = run(*as_steamos, *curl, f'{cdn}/steam_client_{STEAM_CLIENT_BETA}_linuxarm64',
+                           capture=True).stdout
+            # Include shared UI assets and native ARM64 components from the same build.
+            blocks = dict(re.findall(r'"([a-z0-9_]+)"\s*\{([^{}]*)\}', manifest))
+            if 'bins_linuxarm64_linuxarm64' not in blocks:
+                raise RuntimeError(f'Steam {STEAM_CLIENT_BETA} manifest has no native arm64 client')
+            for package, block in blocks.items():
+                if package != 'steam_linuxarm64' and not package.endswith(('_all', '_linuxarm64_linuxarm64')):
+                    continue
+                filename = re.search(r'"file"\s+"([a-z0-9_]+\.zip\.[0-9a-f]{40}(?:_[a-z0-9_]+)?)"', block)
+                checksum = re.search(r'"sha2"\s+"([0-9a-f]{64})"', block)
+                if filename is None or checksum is None:
+                    raise RuntimeError(f'Invalid Steam arm64 manifest entry: {package}')
+                run(*as_steamos, *curl, '-o', f'{staging}/{filename[1]}', f'{cdn}/{filename[1]}')
+                with (Path(directory) / filename[1]).open('rb') as download:
+                    if hashlib.file_digest(download, 'sha256').hexdigest() != checksum[1]:
+                        raise RuntimeError(f'Steam arm64 archive checksum mismatch: {filename[1]}')
+                # Valve's ZIP entries can use backslashes as path separators.
+                run(*as_steamos, 'bsdtar', '-xf', f'{staging}/{filename[1]}',
+                    '-C', steam, '-s', r',\\,/,g')
+            run(*as_steamos, 'sh', '-ec', r'''
+cd "$1"
+touch .steam-enable-steamrt64-client
+# Leave steamrt64 for the updater's separate x86-64 runtime.
+chmod -R u+X steamrtarm64
+chmod u+x steamrtarm64/steam steamrtarm64/steamwebhelper steamrtarm64/steamwebhelper.sh \
+    steamrtarm64/gldriverquery steamrtarm64/vulkandriverquery steamrtarm64/steamsysinfo
+ln -sfnT ../.local/share/Steam/linuxarm64 "$2/sdkarm64"
+''', 'seed-steam-arm64', steam, links)
+    run(*as_steamos, 'mkdir', '-p', f'{steam}/package')
+    run(*as_steamos, 'tee', f'{steam}/package/beta', input=f'{STEAM_CLIENT_BETA}\n', capture=True)
+    for name in ('root', 'steam'):
+        run(*as_steamos, 'ln', '-sfnT', '../.local/share/Steam', f'{links}/{name}')
+
+
+def configure_holo(root, arch, *, autologin=False):
+    packages = ['alsa-ucm-conf', 'curl', 'fonts-dejavu-core', 'libgl1-mesa-dri', 'mesa-vulkan-drivers',
+                'pipewire-pulse', 'steam-devices', 'xwayland']
+    if arch == 'amd64':
+        packages += ['steam-installer', 'steam-libs-i386:i386',
+                     'libgl1-mesa-dri:i386', 'mesa-vulkan-drivers:i386',
+                     'firmware-amd-graphics', 'firmware-atheros', 'firmware-mediatek',
+                     'firmware-realtek']
+        launch = 'exec /usr/games/steam "$@"\n'
+    else:
+        packages += ['libarchive-tools', 'libatomic1', 'libgtk2.0-0t64', 'libibus-1.0-5',
+                     'libnss3', 'libopenal1', 'libva-x11-2', 'libvpx-dev', 'libxss1', 'libxtst6']
+        launch = '''client="$HOME/.local/share/Steam/steamrtarm64"
+export LD_LIBRARY_PATH="$client:/usr/local/lib/libitina-steam${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# The native Steam binary returns 42 when it needs its launcher to restart it.
+for attempt in 1 2 3; do
+    "$client/steam" "$@"
+    status=$?
+    if [ "$status" -ne 42 ]; then
+        exit "$status"
+    fi
+    if [ "$attempt" -lt 3 ]; then
+        echo "Steam requested a restart after its update. Relaunching." >&2
+    fi
+done
+echo "Steam kept requesting restarts after three attempts." >&2
+exit 42
+'''
+    gamescope = run('chroot', root, 'apt-cache', 'policy', 'gamescope', capture=True).stdout
+    gamescope_available = re.search(r'^\s*Candidate: \d', gamescope, re.MULTILINE) is not None
+    if gamescope_available:
+        packages.append('gamescope')
+    else:
+        print('Gamescope package unavailable for this guest, using Labwc for Holo.', flush=True)
+    run('chroot', root, 'apt-get', 'install', '-y', '--no-install-recommends', *packages)
+    if arch == 'arm64':
+        # Keep the beta's legacy libvpx lookup local to the Steam process.
+        compat = root / 'usr/local/lib/libitina-steam'
+        compat.mkdir(parents=True, exist_ok=True)
+        (compat / 'libvpx.so.6').symlink_to('/usr/lib/aarch64-linux-gnu/libvpx.so')
+    run('chroot', root, 'useradd', '--create-home', '--user-group',
+        '--shell', '/bin/bash', 'steamos')
+    run('chroot', root, 'chpasswd', input='steamos:gaben\n')
+    write(root, '/etc/ssh/sshd_config.d/90-libitina-holo.conf',
+          'Match User steamos\n    AuthenticationMethods publickey\nMatch all\n')
+    seed_holo_steam(root, arch)
+
+    write(root, '/usr/local/bin/libitina-steam', '#!/bin/sh\n' + launch, 0o755)
+    install_holo_sessions(root, gamescope_available, autologin)
+
+
+def install_holo_sessions(root, gamescope_available, autologin):
+    launcher = '/usr/local/bin/libitina-holo-session'
+    write(root, launcher, '''#!/bin/sh
+set -eu
+profile=$1
+compositor=$2
+shift 2
+export PATH="$PATH:/usr/games"
+export XDG_SESSION_TYPE=wayland
+unset DISPLAY WAYLAND_DISPLAY
+
+original_umask=$(umask)
+umask 077
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/libitina/holo"
+mkdir -p "$log_dir"
+log="$log_dir/$profile.log"
+if [ -f "$log" ]; then
+    mv -f "$log" "$log.previous"
+fi
+exec >"$log" 2>&1
+printf '%s Starting %s with %s\\n' "$(date -Is)" "$profile" "$compositor"
+umask "$original_umask"
+
+if [ "$compositor" = terminal ]; then
+    export XDG_CURRENT_DESKTOP=labwc
+    exec labwc --session /usr/bin/foot
+fi
+
+set -- /usr/local/bin/libitina-steam -steamdeck -steamos3 -gamepadui -clientbeta @CLIENT_BETA@ "$@"
+printf 'Steam command: %s\\n' "$*"
+if [ "$compositor" = gamescope ]; then
+    export XDG_CURRENT_DESKTOP=gamescope
+    exec gamescope -e -- "$@"
+fi
+if [ "$compositor" = auto ] && command -v gamescope >/dev/null; then
+    XDG_CURRENT_DESKTOP=gamescope gamescope -e -- "$@" && exit 0
+    echo "Gamescope exited with an error. Starting the Steam session in Labwc." >&2
+fi
+export XDG_CURRENT_DESKTOP=labwc
+# Keep the compositor alive when Steam exits to apply an update.
+exec labwc --startup "$*"
+'''.replace('@CLIENT_BETA@', STEAM_CLIENT_BETA), 0o755)
+    profiles = [
+        ('default', 'Default', ()),
+        ('force-gpu', 'CEF Force GPU', ('-cef-force-gpu',)),
+        ('x11', 'CEF X11', ('-cef-ozone-platform=x11',)),
+        ('no-sandbox', 'CEF Sandbox Off', ('-no-cef-sandbox',)),
+        ('angle', 'CEF ANGLE Vulkan', ('-cef-use-gl=angle', '-cef-use-angle=vulkan')),
+        ('combined', 'CEF GPU, X11, ANGLE Vulkan, Sandbox Off',
+         ('-cef-force-gpu', '-cef-ozone-platform=x11', '-cef-use-gl=angle',
+          '-cef-use-angle=vulkan', '-no-cef-sandbox')),
+    ]
+    sessions = [('libitina-holo', 'Libitina Holo', 'auto', ()),
+                ('libitina-holo-terminal', 'Libitina Holo (Terminal)', 'terminal', ())]
+    compositors = [('labwc', 'Labwc')]
+    if gamescope_available:
+        compositors.append(('gamescope', 'Gamescope'))
+    for compositor, name in compositors:
+        sessions.extend((f'libitina-holo-{compositor}-{profile}', f'Holo {name} ({label})',
+                         compositor, flags) for profile, label, flags in profiles)
+    for profile, name, compositor, flags in sessions:
+        command = ' '.join((launcher, profile, compositor, *flags))
+        write(root, f'/usr/share/wayland-sessions/{profile}.desktop',
+              f'[Desktop Entry]\nName={name}\nType=Application\nExec={command}\n'
+              'X-LightDM-Session-Type=wayland\n')
+
+    automatic = ('autologin-user=steamos\nautologin-user-timeout=0\n'
+                 'autologin-session=libitina-holo\n') if autologin else ''
+    write(root, '/etc/lightdm/lightdm.conf.d/90-libitina-holo.conf',
+          '[Seat:*]\ngreeter-session=lightdm-gtk-greeter\n'
+          'greeter-hide-users=false\nuser-session=libitina-holo\n' + automatic)
 
 
 def configure_oobe(root):
@@ -688,6 +883,10 @@ def main():
                         help='build a RecoveryOS ZIP or add a bootable recovery partition to a disk')
     parser.add_argument('--rootless', action='store_true',
                         help='use a read-only system partition with a persistent /home-backed overlay (img and qcow2)')
+    parser.add_argument('--holo', action='store_true',
+                        help='preinstall Steam and add Holo gaming sessions for steamos')
+    parser.add_argument('--holo-autologin', action='store_true',
+                        help='skip the Holo session picker and log in as steamos (requires --holo)')
     parser.add_argument('--root-password', default=None,
                         help='INSECURE: visible in process arguments; prefer offline setup')
     parser.add_argument('--work-dir', type=Path,
@@ -696,8 +895,12 @@ def main():
                         help='allow /tmp and RAM filesystems; default to TMPDIR when --work-dir is omitted')
     parser.add_argument('--_mount-namespace', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.holo_autologin and not args.holo:
+        parser.error('--holo-autologin requires --holo')
     if args.rootless and args.format == 'zip':
         parser.error('--rootless requires an img or qcow2 disk image')
+    if args.holo and args.recovery and args.format == 'zip':
+        parser.error('--holo requires a main system image; ZIP with --recovery contains RecoveryOS only')
     if os.geteuid() != 0:
         parser.error('must run as root on Linux')
     if sys.platform != 'linux':
