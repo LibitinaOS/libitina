@@ -142,7 +142,9 @@ def configure_apt_sources(root, args, *, holo=False):
 
 
 def configure_system(root, args):
-    install_build_metadata(root, args)
+    variant = 'holo' if getattr(args, 'holo', False) else 'normal'
+    install_build_metadata(root, args, variant)
+    install_libitina(root, args.output)
     write(root, '/etc/fstab',
           'LABEL=DEBROOT / ext4 defaults 0 1\n'
           'LABEL=DEBHOME /home ext4 defaults,nofail 0 2\n'
@@ -156,7 +158,7 @@ def bootstrap(root, args):
     configure_system(root, args)
 
 
-def install_build_metadata(root, args):
+def install_build_metadata(root, args, variant):
     # Resolve the source repository independently of the caller's working directory.
     source = Path(__file__).resolve().parent
     metadata = {
@@ -168,8 +170,11 @@ def install_build_metadata(root, args):
                           capture=True).stdout.strip(),
         'git_branch': run('git', '-C', source, 'rev-parse', '--abbrev-ref', 'HEAD',
                           capture=True).stdout.strip(),
+        'is_debug': getattr(args, 'debug', False),
+        'is_dirty': bool(run('git', '-C', source, 'status', '--porcelain',
+                             '--untracked-files=normal', capture=True).stdout.strip()),
+        'variant': variant,
     }
-    install_libitina(root, args.output)
     write(root, '/etc/libitina-info', json.dumps(metadata, indent=2) + '\n', 0o644)
 
 
@@ -278,6 +283,7 @@ def chroot_mounts(root):
 
 def install_guest(root, args, bootable):
     holo = getattr(args, 'holo', False)
+    debug = getattr(args, 'debug', False)
     packages = ['systemd-sysv', 'libpam-systemd', 'tzdata', 'dbus', 'ca-certificates', 'iproute2',
                 'network-manager', 'sudo', 'openssh-server', 'lightdm',
                 'lightdm-gtk-greeter', 'xserver-xorg', 'locales', 'keyboard-configuration', 'zstd',
@@ -306,19 +312,32 @@ def install_guest(root, args, bootable):
         run('chroot', root, '/usr/bin/python3',
             '/usr/share/libitina/Applications/install.py', '--system')
         if holo:
-            configure_holo(root, args.arch, autologin=args.holo_autologin)
+            configure_holo(root, args.arch, autologin=args.holo_autologin, debug=debug)
         else:
             configure_oobe(root)
         run('chroot', root, 'apt-get', 'clean')
         run('chroot', root, 'systemctl', 'enable', 'ssh', 'NetworkManager', 'lightdm')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
-        # Passwordless root is not enabled. Set a password via --root-password.
-        if args.root_password:
-            run('chroot', root, 'chpasswd', input=f'root:{args.root_password}\n')
+        configure_guest_authentication(root, args)
         # Rebrand only after installers that inspect the base distribution finish.
         run('chroot', root, '/usr/bin/python3', '/usr/share/libitina/DeNura/main.py')
     # Avoid shipping identical machine IDs and SSH host keys across images.
     write(root, '/etc/machine-id', '')
+    regenerate_ssh_host_keys(root)
+
+
+def configure_guest_authentication(root, args):
+    password = args.root_password
+    if getattr(args, 'debug', False):
+        if password is None:
+            password = 'debug'
+        write(root, '/etc/ssh/sshd_config.d/00-libitina-debug.conf',
+              'PasswordAuthentication yes\nPermitRootLogin yes\n')
+    if password:
+        run('chroot', root, 'chpasswd', input=f'root:{password}\n')
+
+
+def regenerate_ssh_host_keys(root):
     for key in (root / 'etc/ssh').glob('ssh_host_*'):
         key.unlink()
     write(root, '/etc/systemd/system/regenerate-ssh-keys.service',
@@ -386,12 +405,12 @@ def seed_holo_steam(root, arch):
             cdn = 'https://client-update.steamstatic.com'
             manifest = run(*as_steamos, *curl, f'{cdn}/steam_client_{STEAM_CLIENT_BETA}_linuxarm64',
                            capture=True).stdout
-            # Include shared UI assets and native ARM64 components from the same build.
+            # Install shared assets and all ARM64 packages from the current client build.
             blocks = dict(re.findall(r'"([a-z0-9_]+)"\s*\{([^{}]*)\}', manifest))
             if 'bins_linuxarm64_linuxarm64' not in blocks:
                 raise RuntimeError(f'Steam {STEAM_CLIENT_BETA} manifest has no native arm64 client')
             for package, block in blocks.items():
-                if package != 'steam_linuxarm64' and not package.endswith(('_all', '_linuxarm64_linuxarm64')):
+                if not package.endswith(('_all', '_linuxarm64')):
                     continue
                 filename = re.search(r'"file"\s+"([a-z0-9_]+\.zip\.[0-9a-f]{40}(?:_[a-z0-9_]+)?)"', block)
                 checksum = re.search(r'"sha2"\s+"([0-9a-f]{64})"', block)
@@ -419,11 +438,11 @@ ln -sfnT ../.local/share/Steam/linuxarm64 "$2/sdkarm64"
         run(*as_steamos, 'ln', '-sfnT', '../.local/share/Steam', f'{links}/{name}')
 
 
-def configure_holo(root, arch, *, autologin=False):
+def configure_holo(root, arch, *, autologin=False, debug=False):
     packages = ['alsa-ucm-conf', 'curl', 'fonts-dejavu-core', 'libgl1-mesa-dri', 'mesa-vulkan-drivers',
-                'pipewire-pulse', 'steam-devices', 'xwayland']
+                'lsof', 'pipewire-pulse', 'steam-devices', 'xwayland']
     if arch == 'amd64':
-        packages += ['steam-installer', 'steam-libs-i386:i386',
+        packages += ['steam-installer', 'steam-libs-i386:i386', 'xauth', 'xvfb',
                      'libgl1-mesa-dri:i386', 'mesa-vulkan-drivers:i386',
                      'firmware-amd-graphics', 'firmware-atheros', 'firmware-mediatek',
                      'firmware-realtek']
@@ -462,12 +481,33 @@ exit 42
     run('chroot', root, 'useradd', '--create-home', '--user-group',
         '--shell', '/bin/bash', 'steamos')
     run('chroot', root, 'chpasswd', input='steamos:gaben\n')
-    write(root, '/etc/ssh/sshd_config.d/90-libitina-holo.conf',
-          'Match User steamos\n    AuthenticationMethods publickey\nMatch all\n')
+    write(root, '/etc/sudoers.d/libitina-holo', 'steamos ALL=(ALL:ALL) ALL\n', 0o440)
+    if not debug:
+        write(root, '/etc/ssh/sshd_config.d/90-libitina-holo.conf',
+              'Match User steamos\n    AuthenticationMethods publickey\nMatch all\n')
     seed_holo_steam(root, arch)
 
     write(root, '/usr/local/bin/libitina-steam', '#!/bin/sh\n' + launch, 0o755)
+    if arch == 'amd64':
+        update_holo_steam(root)
     install_holo_sessions(root, gamescope_available, autologin)
+
+
+def update_holo_steam(root):
+    # Use Steam's updater so the image also contains its installed package state.
+    as_steamos = ('chroot', root, 'runuser', '-u', 'steamos', '--')
+    run(*as_steamos, 'timeout', '--kill-after=30s', '20m', 'xvfb-run', '-a',
+        '/usr/local/bin/libitina-steam', '-clientbeta', STEAM_CLIENT_BETA,
+        '-forcesteamupdate', '-exitsteam')
+    run(*as_steamos, 'sh', '-ec', '''
+for manifest in "$HOME"/.local/share/Steam/package/steam_client_*.installed; do
+    if [ -s "$manifest" ]; then
+        exit 0
+    fi
+done
+echo 'Steam updater did not record an installed client manifest' >&2
+exit 1
+''')
 
 
 def install_holo_sessions(root, gamescope_available, autologin):
@@ -509,8 +549,9 @@ if [ "$compositor" = auto ] && command -v gamescope >/dev/null; then
     echo "Gamescope exited with an error. Starting the Steam session in Labwc." >&2
 fi
 export XDG_CURRENT_DESKTOP=labwc
+# Steam uses the Wayland display marker to select the Game Mode power menu.
 # Keep the compositor alive when Steam exits to apply an update.
-exec labwc --startup "$*"
+exec labwc --startup "sh -c 'export GAMESCOPE_WAYLAND_DISPLAY=\\"\\$WAYLAND_DISPLAY\\"; exec \\"\\$@\\"' steam $*"
 '''.replace('@CLIENT_BETA@', STEAM_CLIENT_BETA), 0o755)
     profiles = [
         ('default', 'Default', ()),
@@ -586,6 +627,8 @@ def build_recovery(work, args, *, system_root=None):
     if system_root is not None:
         # Preserve ownership, links, device nodes and extended attributes.
         run('cp', '-a', f'{root}/.', system_root)
+    install_build_metadata(root, args, 'recovery')
+    debug = getattr(args, 'debug', False)
     write(root, '/etc/fstab', '')
     write(root, '/etc/initramfs-tools/modules', 'squashfs\noverlay\n')
     write(root, '/etc/initramfs-tools/scripts/local-bottom/recovery-overlay', '''#!/bin/sh
@@ -635,7 +678,11 @@ WantedBy=graphical.target
         run('chroot', root, 'apt-get', 'update')
         run('chroot', root, 'apt-get', 'install', '-y', '--no-install-recommends',
             'systemd-sysv', 'udev', 'dbus', 'seatd', 'labwc', 'foot', 'fonts-dejavu',
-            'libgl1-mesa-dri', 'initramfs-tools', 'python3', f'linux-image-{args.arch}')
+            'libgl1-mesa-dri', 'initramfs-tools', 'python3', f'linux-image-{args.arch}',
+            *(['openssh-server'] if debug else []))
+        if debug:
+            configure_guest_authentication(root, args)
+            run('chroot', root, 'systemctl', 'enable', 'ssh')
         run('chroot', root, 'systemctl', 'mask', 'getty@tty1.service', 'seatd.service')
         run('chroot', root, 'systemctl', 'enable', 'recovery-desktop.service')
         run('chroot', root, 'systemctl', 'set-default', 'graphical.target')
@@ -644,6 +691,8 @@ WantedBy=graphical.target
         run('chroot', root, '/usr/bin/python3', '-', input=denura.read_text(encoding='utf-8'))
     write(root, '/etc/issue', 'Libitina RecoveryOS\n')
     write(root, '/etc/machine-id', '')
+    if debug:
+        regenerate_ssh_host_keys(root)
     kernel, = (root / 'boot').glob('vmlinuz-*')
     initrd = kernel.with_name(kernel.name.replace('vmlinuz-', 'initrd.img-', 1))
     shutil.copyfile(kernel, artifacts / 'vmlinuz')
@@ -887,6 +936,8 @@ def main():
                         help='preinstall Steam and add Holo gaming sessions for steamos')
     parser.add_argument('--holo-autologin', action='store_true',
                         help='skip the Holo session picker and log in as steamos (requires --holo)')
+    parser.add_argument('--debug', action='store_true',
+                        help='enable SSH password login and default the root password to "debug"')
     parser.add_argument('--root-password', default=None,
                         help='INSECURE: visible in process arguments; prefer offline setup')
     parser.add_argument('--work-dir', type=Path,

@@ -78,11 +78,12 @@ sudo python3 BuildTool/main.py img ./libitina-holo-arm64.img --holo --arch arm64
 
 The build prepares `/home/steamos/.local/share/Steam` and `~/.steam` links
 owned by `steamos`. The amd64 build installs Debian's Steam launcher and
-stages Valve's Steam bootstrap. The arm64 build stages Valve's native client
-from the Steam Deck public beta. All Steam sessions use
+stages Valve's Steam bootstrap, then runs Steam's client updater as
+`steamos`. The arm64 build installs the native client and shared packages
+directly from Valve's current Steam Deck public beta manifest. All Steam sessions use
 `-steamdeck -steamos3 -gamepadui -clientbeta steamdeck_publicbeta`. Steam can
-download updates and runtimes on first launch, and players sign in to their
-own Steam accounts.
+verify or update the client and download additional runtimes on first launch.
+Players sign in to their own Steam accounts.
 
 ### Troubleshooting a black screen
 

@@ -26,7 +26,7 @@ class HoloTests(unittest.TestCase):
                                        holo=True, holo_autologin=False, root_password=None)
                 builder.install_guest(root, args, True)
                 oobe.assert_not_called()
-                holo.assert_called_once_with(root, arch, autologin=False)
+                holo.assert_called_once_with(root, arch, autologin=False, debug=False)
                 sources = (root / 'etc/apt/sources.list').read_text()
                 self.assertIn('trixie main contrib non-free-firmware\n', sources)
                 self.assertIn('trixie-backports main contrib\n', sources)
@@ -47,9 +47,18 @@ class HoloTests(unittest.TestCase):
             builder.configure_holo(root, 'amd64')
             seed.assert_called_once_with(root, 'amd64')
             self.assertIn('gamescope', run.call_args_list[1].args)
+            self.assertIn('lsof', run.call_args_list[1].args)
+            self.assertIn('xvfb', run.call_args_list[1].args)
+            run.assert_any_call('chroot', root, 'runuser', '-u', 'steamos', '--',
+                                'timeout', '--kill-after=30s', '20m', 'xvfb-run', '-a',
+                                '/usr/local/bin/libitina-steam', '-clientbeta', 'steamdeck_publicbeta',
+                                '-forcesteamupdate', '-exitsteam')
             run.assert_any_call('chroot', root, 'useradd', '--create-home', '--user-group',
                                 '--shell', '/bin/bash', 'steamos')
             run.assert_any_call('chroot', root, 'chpasswd', input='steamos:gaben\n')
+            sudoers = root / 'etc/sudoers.d/libitina-holo'
+            self.assertEqual(sudoers.read_text(), 'steamos ALL=(ALL:ALL) ALL\n')
+            self.assertEqual(sudoers.stat().st_mode & 0o777, 0o440)
             sshd = (root / 'etc/ssh/sshd_config.d/90-libitina-holo.conf').read_text()
             self.assertIn('Match User steamos\n    AuthenticationMethods publickey\nMatch all\n', sshd)
             lightdm = (root / 'etc/lightdm/lightdm.conf.d/90-libitina-holo.conf').read_text()
@@ -83,11 +92,15 @@ class HoloTests(unittest.TestCase):
 
             flags = ('/usr/local/bin/libitina-steam -steamdeck -steamos3 -gamepadui '
                      '-clientbeta steamdeck_publicbeta')
+            labwc_start = (
+                'labwc labwc --startup sh -c \'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; '
+                'exec "$@"\' steam'
+            )
             for status in ('0', '1'):
                 result, log = launch('libitina-holo', status)
                 self.assertEqual(result, 0)
                 self.assertIn(f'gamescope gamescope -e -- {flags}', log)
-                self.assertEqual(f'labwc labwc --startup {flags}' in log, status == '1')
+                self.assertEqual(f'{labwc_start} {flags}' in log, status == '1')
             previous = (log_dir / 'libitina-holo.log.previous').read_text()
             self.assertIn('gamescope gamescope -e --', previous)
             self.assertNotIn('labwc labwc --startup', previous)
@@ -111,7 +124,7 @@ class HoloTests(unittest.TestCase):
                             self.assertNotIn('labwc labwc', log)
                         else:
                             self.assertEqual(result, 0)
-                            self.assertIn(f'labwc labwc --startup {flags}{overrides}\n', log)
+                            self.assertIn(f'{labwc_start} {flags}{overrides}\n', log)
                             self.assertNotIn('gamescope gamescope', log)
             result, log = launch('libitina-holo-terminal', '0')
             self.assertEqual(result, 0)
@@ -122,7 +135,7 @@ class HoloTests(unittest.TestCase):
         archive = b'steam archive'
         checksum = hashlib.sha256(archive).hexdigest()
         packages = ('steam_linuxarm64', 'bins_linuxarm64_linuxarm64', 'steamui_websrc_all',
-                    'bins_steamrt_linuxarm64')
+                    'bins_misc_linuxarm64', 'runtime_steamrtarm64_linuxarm64', 'bins_ubuntu12')
         filenames = [f'{package}.zip.{"a" * 40}' for package in packages]
         manifest = '\n'.join(f'"{package}" {{ "file" "{filename}" "sha2" "{checksum}" }}'
                              for package, filename in zip(packages, filenames))
@@ -162,7 +175,7 @@ class HoloTests(unittest.TestCase):
                     if valid:
                         builder.seed_holo_steam(root, 'arm64')
                         extractions = [call.args for call in run.call_args_list if 'bsdtar' in call.args]
-                        self.assertEqual([Path(args[8]).name for args in extractions], filenames[:3])
+                        self.assertEqual([Path(args[8]).name for args in extractions], filenames[:-1])
                         self.assertTrue(all(args[2:6] == ('runuser', '-u', 'steamos', '--')
                                             for args in extractions))
                         for helper in helpers:
@@ -177,11 +190,14 @@ class HoloTests(unittest.TestCase):
 
     def test_arm64_launcher_restarts_only_for_steam_update(self):
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(builder, 'seed_holo_steam'), \
+                patch.object(builder, 'seed_holo_steam') as seed, \
+                patch.object(builder, 'update_holo_steam') as update, \
                 patch.object(builder, 'run',
                              return_value=SimpleNamespace(stdout='  Candidate: 3.16.22\n')):
             root = Path(directory)
             builder.configure_holo(root, 'arm64')
+            seed.assert_called_once_with(root, 'arm64')
+            update.assert_not_called()
             launcher = root / 'usr/local/bin/libitina-steam'
             flags = ['-gamepadui', '-clientbeta', 'steamdeck_publicbeta']
             for first_exit, later_exit, expected_exit, attempts in (

@@ -1,4 +1,5 @@
 import contextlib
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,6 +11,41 @@ from test_cleanup import builder
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_build_metadata_records_variant_debug_and_dirty_state(self):
+        for variant, debug, status in [('normal', False, ''), ('holo', True, ' M file\n'),
+                                       ('recovery', True, '?? new-file\n')]:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(builder, 'run', side_effect=[
+                        SimpleNamespace(stdout='commit\n'), SimpleNamespace(stdout='branch\n'),
+                        SimpleNamespace(stdout=status)]):
+                root = Path(temp)
+                builder.install_build_metadata(root, SimpleNamespace(arch='amd64', debug=debug),
+                                               variant)
+                metadata = json.loads((root / 'etc/libitina-info').read_text())
+                self.assertEqual(metadata['variant'], variant)
+                self.assertIs(metadata['is_debug'], debug)
+                self.assertIs(metadata['is_dirty'], bool(status))
+
+    def test_debug_ssh_authentication_respects_explicit_root_password(self):
+        for debug, supplied, expected in [(False, None, None), (False, 'custom', 'custom'),
+                                          (True, None, 'debug'), (True, 'custom', 'custom')]:
+            with self.subTest(debug=debug, supplied=supplied), \
+                    tempfile.TemporaryDirectory() as temp, patch.object(builder, 'run') as run:
+                root = Path(temp)
+                builder.configure_guest_authentication(
+                    root, SimpleNamespace(debug=debug, root_password=supplied))
+                sshd = root / 'etc/ssh/sshd_config.d/00-libitina-debug.conf'
+                if debug:
+                    self.assertEqual(sshd.read_text(),
+                                     'PasswordAuthentication yes\nPermitRootLogin yes\n')
+                else:
+                    self.assertFalse(sshd.exists())
+                if expected is None:
+                    run.assert_not_called()
+                else:
+                    run.assert_called_once_with('chroot', root, 'chpasswd',
+                                                input=f'root:{expected}\n')
+
     def test_native_and_cross_detection(self):
         for host, native, foreign in [('x86_64', 'amd64', 'arm64'), ('aarch64', 'arm64', 'amd64')]:
             with patch.object(builder.platform, 'machine', return_value=host):
