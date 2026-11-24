@@ -47,7 +47,22 @@ else:
 
 
 def internal_watermark_text():
-    """Read host and checkout information, falling back to BuildTool metadata."""
+    """Read system, checkout, and BuildTool metadata for the watermark."""
+    try:
+        metadata = json.loads(Path("/etc/libitina-info").read_text())
+    except (OSError, ValueError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    def stored_value(key):
+        value = metadata.get(key)
+        return value.strip() if isinstance(value, str) and value.strip() else "unknown"
+
+    def stored_flag(key):
+        value = metadata.get(key)
+        return str(value) if isinstance(value, bool) else "unknown"
+
     try:
         pretty_name = platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
     except OSError:
@@ -62,23 +77,15 @@ def internal_watermark_text():
         except (OSError, subprocess.SubprocessError):
             return None
 
-    branch = git_value("rev-parse", "--abbrev-ref", "HEAD")
-    commit = git_value("rev-parse", "HEAD")
-    if branch is None or commit is None:
-        try:
-            metadata = json.loads(Path("/etc/libitina-info").read_text())
-        except (OSError, ValueError):
-            metadata = {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        def stored_value(key):
-            value = metadata.get(key)
-            return value.strip() if isinstance(value, str) and value.strip() else "unknown"
-
-        branch = branch or stored_value("git_branch")
-        commit = commit or stored_value("git_commit")
-    return f"{pretty_name}\n{platform.release()}\nb={branch} c={commit}\nI <3 Jamie Paige"
+    branch = git_value("rev-parse", "--abbrev-ref", "HEAD") or stored_value("git_branch")
+    commit = git_value("rev-parse", "HEAD") or stored_value("git_commit")
+    return (
+        f'{pretty_name}\n{platform.release()}\nb={branch} c={commit}\n'
+        f'var={stored_value("variant")} dbg={stored_flag("is_debug")} drty={stored_flag("is_dirty")}\n'
+        f'builder={stored_value("builder_username")}@{stored_value("builder_hostname")}\n'
+        f'bd_tmdate={stored_value("build_datetime")}\n'
+        'I <3 Jamie Paige'
+    )
 
 
 class Wallpaper(Gtk.Image):

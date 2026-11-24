@@ -30,6 +30,10 @@ def internal_watermark_text():
         value = metadata.get(key)
         return value.strip() if isinstance(value, str) and value.strip() else 'unknown'
 
+    def stored_flag(key):
+        value = metadata.get(key)
+        return str(value) if isinstance(value, bool) else 'unknown'
+
     try:
         hostname = socket.gethostname()
     except OSError:
@@ -65,7 +69,13 @@ def internal_watermark_text():
     if branch is None or commit is None:
         branch = branch or stored_value('git_branch')
         commit = commit or stored_value('git_commit')
-    watermark = f'{pretty_name}\n{platform.release()}\nb={branch} c={commit}\nI <3 Jamie Paige'
+    watermark = (
+        f'{pretty_name}\n{platform.release()}\nb={branch} c={commit}\n'
+        f'var={stored_value("variant")} dbg={stored_flag("is_debug")} drty={stored_flag("is_dirty")}\n'
+        f'builder={stored_value("builder_username")}@{stored_value("builder_hostname")}\n'
+        f'bd_tmdate={stored_value("build_datetime")}\n'
+        'I <3 Jamie Paige'
+    )
     if warnings:
         return '\n'.join(warnings) + '\n\n' + watermark
     return watermark
