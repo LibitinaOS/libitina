@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import platform
 import re
 import sys
@@ -133,8 +134,8 @@ def save_gtk_theme(theme: str, dark: bool) -> None:
     config.save_to_file(str(path))
 
 
-def update_palette_overrides(name: str | None = None, value: str = "") -> set[str]:
-    """Save one palette color or comment out all active palette overrides."""
+def update_palette_overrides(colors: dict[str, str] | None = None) -> set[str]:
+    """Save palette overrides together or comment out all active palette overrides."""
     path = Path(GLib.get_user_config_dir()) / "gtk-3.0" / "gtk.css"
     stylesheet = Gio.File.new_for_path(str(path))
     try:
@@ -145,7 +146,7 @@ def update_palette_overrides(name: str | None = None, value: str = "") -> set[st
         css, etag = b"", None
 
     changed = set()
-    if name is None:
+    if colors is None:
         def comment_override(match: re.Match[bytes]) -> bytes:
             if match["name"] is None or match["name"].decode("ascii") not in PALETTE_COLORS:
                 return match[0]
@@ -158,19 +159,40 @@ def update_palette_overrides(name: str | None = None, value: str = "") -> set[st
 
         updated = COLOR_DECLARATION_OR_COMMENT.sub(comment_override, css)
     else:
-        encoded_name = name.encode("ascii")
+        names = {name.encode("ascii") for name in colors}
         updated = MANAGED_COLOR_RULE.sub(
-            lambda match: b"" if match["name"] == encoded_name else match[0], css
+            lambda match: b"" if match["name"] in names else match[0], css
         )
         if updated and not updated.endswith(b"\n"):
             updated += b"\n"
-        updated += f"@define-color {name} {value}; /* Yui Settings */\n".encode("ascii")
-        changed.add(name)
+        updated += "".join(
+            f"@define-color {name} {value}; /* Yui Settings */\n"
+            for name, value in colors.items()
+        ).encode("ascii")
+        changed.update(colors)
     if updated == css:
         return set()
     path.parent.mkdir(parents=True, exist_ok=True)
     stylesheet.replace_contents(updated, etag, False, Gio.FileCreateFlags.NONE, None)
     return changed
+
+
+def read_palette_file(path: Path) -> dict[str, str]:
+    colors = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(colors, dict) or not colors:
+        raise ValueError("The file must contain a JSON object with at least one theme color.")
+    for name, value in colors.items():
+        if name not in PALETTE_COLORS:
+            raise ValueError(f"Unknown theme color: {name}")
+        if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+            raise ValueError(f"The color {name} must use #RRGGBB format.")
+    return {name: value.upper() for name, value in colors.items()}
+
+
+def color_hex(color: Gdk.RGBA) -> str:
+    return "#{:02X}{:02X}{:02X}".format(
+        *(round(channel * 255) for channel in (color.red, color.green, color.blue))
+    )
 
 
 def get_os_name() -> str:
@@ -974,29 +996,92 @@ class SettingsWindow(Handy.ApplicationWindow):
         dialog.connect("response", lambda dialog, _response: dialog.destroy())
         page = PreferencesPage()
         dialog.get_content_area().pack_start(page, True, True, 0)
+        actions = Gtk.Box(spacing=8, homogeneous=True)
+        page.body.pack_start(actions, False, False, 0)
+        import_button = Gtk.Button(label="Import JSON…")
+        export_button = Gtk.Button(label="Export JSON…")
+        actions.pack_start(import_button, True, True, 0)
+        actions.pack_start(export_button, True, True, 0)
         colors = group(page.body)
         defaults = self._theme_palette()
+        pickers = {}
         for name, label in PALETTE_COLORS.items():
             button = Gtk.ColorButton(title=f"Choose {label.lower()} color", use_alpha=False)
             button.set_rgba(self._current_palette_color(name, defaults))
             button.connect("color-set", self._on_palette_color_set, name)
             row = action_row(colors, label, name, suffix=button)
             row.set_activatable_widget(button)
+            pickers[name] = button
+        import_button.connect("clicked", self._import_palette, dialog, pickers)
+        export_button.connect("clicked", self._export_palette, dialog)
         dialog.show_all()
 
-    def _on_palette_color_set(self, button: Gtk.ColorButton, name: str) -> None:
-        color = button.get_rgba()
-        value = "#{:02X}{:02X}{:02X}".format(
-            *(round(channel * 255) for channel in (color.red, color.green, color.blue))
+    def _choose_palette_file(self, parent: Gtk.Window, *, save: bool) -> Path | None:
+        chooser = Gtk.FileChooserNative.new(
+            "Export color scheme" if save else "Import color scheme",
+            parent, Gtk.FileChooserAction.SAVE if save else Gtk.FileChooserAction.OPEN,
+            "Export" if save else "Import", "Cancel",
         )
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("JSON files")
+        file_filter.add_mime_type("application/json")
+        file_filter.add_pattern("*.json")
+        chooser.add_filter(file_filter)
+        if save:
+            chooser.set_current_name("deletescapeui-colors.json")
+            chooser.set_do_overwrite_confirmation(True)
         try:
-            update_palette_overrides(name, value)
+            if chooser.run() == Gtk.ResponseType.ACCEPT:
+                filename = chooser.get_filename()
+                if filename:
+                    return Path(filename)
+            return None
+        finally:
+            chooser.destroy()
+
+    def _import_palette(
+        self, _button: Gtk.Button, parent: Gtk.Window, pickers: dict[str, Gtk.ColorButton]
+    ) -> None:
+        path = self._choose_palette_file(parent, save=False)
+        if path is None:
+            return
+        try:
+            colors = read_palette_file(path)
+            self._apply_palette(colors)
+        except (OSError, ValueError, GLib.Error) as exc:
+            self._show_appearance_error("Could not import the color scheme.", exc, parent)
+            return
+
+        for name in colors:
+            pickers[name].set_rgba(self._current_palette_color(name, {}))
+
+    def _export_palette(self, _button: Gtk.Button, parent: Gtk.Window) -> None:
+        path = self._choose_palette_file(parent, save=True)
+        if path is None:
+            return
+        defaults = self._theme_palette()
+        colors = {
+            name: color_hex(self._current_palette_color(name, defaults)) for name in PALETTE_COLORS
+        }
+        content = (json.dumps(colors, indent=2) + "\n").encode("utf-8")
+        try:
+            Gio.File.new_for_path(str(path)).replace_contents(
+                content, None, False, Gio.FileCreateFlags.NONE, None
+            )
+        except GLib.Error as exc:
+            self._show_appearance_error("Could not export the color scheme.", exc, parent)
+
+    def _on_palette_color_set(self, button: Gtk.ColorButton, name: str) -> None:
+        try:
+            self._apply_palette({name: color_hex(button.get_rgba())})
         except (OSError, GLib.Error) as exc:
             button.set_rgba(self._current_palette_color(name, self._theme_palette()))
             self._show_appearance_error("Could not save the theme color.", exc, button.get_toplevel())
             return
 
-        self._palette_preview[name] = value
+    def _apply_palette(self, colors: dict[str, str]) -> None:
+        update_palette_overrides(colors)
+        self._palette_preview.update(colors)
         self._refresh_palette_preview()
 
     def _on_reset_palette(self, _button: Gtk.Button) -> None:

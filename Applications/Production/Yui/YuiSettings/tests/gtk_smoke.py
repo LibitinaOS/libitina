@@ -1,5 +1,6 @@
 """Run with GTK, libhandy, and a display. All system services use fixtures."""
 
+import json
 import os
 import sys
 import time
@@ -217,6 +218,44 @@ window._dark_mode_checkbox.set_active(False)
 light_bg = Gdk.RGBA()
 light_bg.parse('#FFFFFF')
 assert window._current_palette_color('bg', {}).equal(light_bg)
+
+row(advanced, 'Advanced color changer').activate()
+palette_editor = dialog('Advanced color changer')
+import_button = next(widget for widget in widgets(palette_editor)
+                     if isinstance(widget, Gtk.Button) and widget.get_label() == 'Import JSON…')
+export_button = next(widget for widget in widgets(palette_editor)
+                     if isinstance(widget, Gtk.Button) and widget.get_label() == 'Export JSON…')
+scheme_file = Path(temporary.name) / 'colors.json'
+scheme_file.write_text('{"bg": "#202830", "accent": "#34acfe"}')
+with patch.object(window, '_choose_palette_file', return_value=scheme_file):
+    import_button.clicked()
+assert '@define-color bg #202830; /* Yui Settings */\n' in user_css.read_text()
+assert '@define-color accent #34ACFE; /* Yui Settings */\n' in user_css.read_text()
+assert main.color_hex(accent_button.get_rgba()) == '#34ACFE'
+assert main.color_hex(row(palette_editor, 'Background').get_activatable_widget().get_rgba()) == '#202830'
+with patch.object(window, '_choose_palette_file', return_value=scheme_file):
+    export_button.clicked()
+exported = json.loads(scheme_file.read_text())
+assert set(exported) == set(main.PALETTE_COLORS)
+assert exported['bg'] == '#202830' and exported['accent'] == '#34ACFE'
+assert exported['fg'] == '#111111'
+
+invalid_file = Path(temporary.name) / 'invalid.json'
+invalid_file.write_text('{"bg": "#FFFFFF", "accent": "invalid"}')
+css_before_import = user_css.read_bytes()
+with patch.object(window, '_choose_palette_file', return_value=invalid_file):
+    with patch.object(window, '_show_appearance_error') as show_error:
+        import_button.clicked()
+        show_error.assert_called_once()
+assert user_css.read_bytes() == css_before_import
+
+reset_colors.clicked()
+with patch.object(window, '_choose_palette_file', return_value=scheme_file):
+    import_button.clicked()
+assert all(f'@define-color {name} {value}; /* Yui Settings */' in user_css.read_text()
+           for name, value in exported.items())
+palette_editor.response(Gtk.ResponseType.CLOSE)
+reset_colors.clicked()
 window.get_settings().reset_property('gtk-theme-name')
 window.get_settings().reset_property('gtk-application-prefer-dark-theme')
 interface.set_string(main.GTK_THEME_KEY, original_theme)
