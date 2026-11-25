@@ -448,7 +448,7 @@ class SettingsWindow(Handy.ApplicationWindow):
         self._accent_button.set_rgba(self._current_accent_color())
         self._accent_button.connect("color-set", self._on_accent_color_set)
         accent_row = action_row(
-            style_group, "Accent color", "DeletescapeUi GTK 3 themes", suffix=self._accent_button
+            style_group, "Accent color", "", suffix=self._accent_button
         )
         accent_row.set_activatable_widget(self._accent_button)
         self._stack.add_titled(page, "appearance", "Appearance")
