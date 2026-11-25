@@ -232,7 +232,7 @@ class Taskbar(Gtk.Window, ApplicationCatalog):
             border-radius: 0;
             min-width: 32px;
             min-height: 32px;
-            padding: 0;
+            padding: 0 4px;
         }
 
         button.system-status-button {
