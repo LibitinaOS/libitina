@@ -13,8 +13,9 @@ os.environ['XDG_CONFIG_HOME'] = temporary.name
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 gi.require_version('Handy', '1')
-from gi.repository import Gtk, Handy, GLib, Gio
+from gi.repository import Gdk, Gtk, Handy, GLib, Gio
 import service_page
 import main
 import network_pages
@@ -52,7 +53,7 @@ def clock_load(self):
 
 outputs = [dict(name='eDP-1', description='Built-in display', enabled=True, scale=1,
                 position=dict(x=0,y=0), modes=[dict(width=1920,height=1080,refresh=60,current=True)])]
-config = {'software_rendering_apps': [], 'shell': 'desktop'}
+config = {'software_rendering_apps': [], 'shell': 'desktop', 'wallpaper': 'zohran'}
 patches = [patch.object(display_page.displays, 'query_outputs', lambda: outputs),
     patch.object(display_page.displays, 'CONFIG_PATH', Path(temporary.name) / 'monitors.json'),
     patch.object(display_page.displays, 'STATUS_PATH', Path(temporary.name) / 'monitors-status.json'),
@@ -133,6 +134,67 @@ with patch.object(main, 'set_shell', side_effect=OSError('Read-only config')):
 assert config['shell'] == 'desktop'
 assert window._shell_mode_row.get_active_id() == 'desktop'
 assert window._shell_mode_status.get_title() == 'Could not save Yui mode.'
+
+interface = window._interface_settings
+original_theme = interface.get_string(main.GTK_THEME_KEY)
+original_scheme = interface.get_string(main.COLOR_SCHEME_KEY)
+interface.set_string(main.COLOR_SCHEME_KEY, 'default')
+interface.set_string(main.GTK_THEME_KEY, main.DELETESCAPE_DARK_THEME)
+assert window._dark_mode_checkbox.get_active()
+gtk_dir = Path(temporary.name) / 'gtk-3.0'
+gtk_dir.mkdir(exist_ok=True)
+gtk_ini = gtk_dir / 'settings.ini'
+gtk_ini.write_text('[Settings]\ngtk-icon-theme-name=hicolor\n')
+window._dark_mode_checkbox.set_active(False)
+assert interface.get_string(main.GTK_THEME_KEY) == main.DELETESCAPE_THEME
+assert 'gtk-application-prefer-dark-theme=false' in gtk_ini.read_text()
+
+user_css = gtk_dir / 'gtk.css'
+existing_rules = '@define-color example #123456;\n/*\n @define-color accent #ABCDEF;\n*/\n'
+manual_accent = ' @define-color accent #765432;\n'
+user_css.write_text(existing_rules + manual_accent)
+accent_button = row(window._stack.get_child_by_name('appearance'), 'Accent color').get_activatable_widget()
+for value in ('#123ABC', '#00C3FF'):
+    color = Gdk.RGBA()
+    color.parse(value)
+    accent_button.set_rgba(color)
+    accent_button.emit('color-set')
+    assert user_css.read_text() == existing_rules + manual_accent + f'@define-color accent {value}; /* Yui Settings */\n'
+    assert window._current_accent_color().equal(color)
+
+window._dark_mode_checkbox.set_active(True)
+assert interface.get_string(main.GTK_THEME_KEY) == main.DELETESCAPE_DARK_THEME
+assert interface.get_string(main.COLOR_SCHEME_KEY) == 'prefer-dark'
+assert 'gtk-application-prefer-dark-theme=true' in gtk_ini.read_text()
+assert 'gtk-icon-theme-name=hicolor' in gtk_ini.read_text()
+assert window._current_accent_color().equal(color)
+reset_accent = row(window._stack.get_child_by_name('advanced'), 'Reset accent color').get_activatable_widget()
+reset_accent.clicked()
+reset_accent.clicked()
+assert user_css.read_text() == (
+    existing_rules
+    + ' /* @define-color accent #765432; */\n'
+    + '/* @define-color accent #00C3FF; */ /* Yui Settings */\n'
+)
+default_accent = Gdk.RGBA()
+default_accent.parse(main.DEFAULT_ACCENT)
+assert accent_button.get_rgba().equal(default_accent)
+assert window._current_accent_color().equal(default_accent)
+accent_button.set_rgba(color)
+accent_button.emit('color-set')
+assert user_css.read_text() == (
+    existing_rules
+    + ' /* @define-color accent #765432; */\n'
+    + '@define-color accent #00C3FF; /* Yui Settings */\n'
+)
+reset_accent.clicked()
+window._dark_mode_checkbox.set_active(False)
+window.get_settings().reset_property('gtk-theme-name')
+window.get_settings().reset_property('gtk-application-prefer-dark-theme')
+interface.set_string(main.GTK_THEME_KEY, original_theme)
+interface.set_string(main.COLOR_SCHEME_KEY, original_scheme)
+print('DeletescapeUi appearance switches variants and saves and resets custom accents', flush=True)
+
 window.show_all()
 settle()
 for name in ['wallpaper','appearance','display','wifi','cellular','network','bluetooth','audio','power','datetime','accessibility','advanced','about']:
@@ -339,7 +401,7 @@ for name in ['wifi', 'network', 'audio', 'display', 'accessibility']:
     capture(window, name + '-phone.png')
 page = navigate('wifi')
 settle()
-for name in ['wifi', 'cellular', 'network', 'bluetooth', 'audio', 'power', 'datetime', 'accessibility', 'display', 'advanced', 'about']:
+for name in ['appearance', 'wifi', 'cellular', 'network', 'bluetooth', 'audio', 'power', 'datetime', 'accessibility', 'display', 'advanced', 'about']:
     page = navigate(name)
     window.resize(320, 640)
     settle()

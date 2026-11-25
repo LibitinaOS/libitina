@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import platform
+import re
 import sys
 from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("Handy", "1")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gio, GLib, Gtk, Handy, Pango
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Handy, Pango
 
 from service_page import PreferencesPage, action_row, choice_row, group, switch_row
 from display_page import DisplayPage
@@ -32,6 +34,23 @@ COLOR_SCHEME_KEY = "color-scheme"
 GTK_THEME_KEY = "gtk-theme"
 ADWAITA_THEME = "Adwaita"
 ADWAITA_DARK_THEME = "Adwaita-dark"
+DELETESCAPE_THEME = "DeletescapeUi"
+DELETESCAPE_DARK_THEME = "DeletescapeUi-Dark"
+THEME_VARIANTS = (
+    (ADWAITA_THEME, ADWAITA_DARK_THEME),
+    (DELETESCAPE_THEME, DELETESCAPE_DARK_THEME),
+)
+DEFAULT_ACCENT = "#FF00AA"
+MANAGED_ACCENT_RULE = re.compile(
+    rb"^(?:@define-color accent #[0-9A-Fa-f]{6};|/\* @define-color accent #[0-9A-Fa-f]{6}; \*/)"
+    rb" /\* Yui Settings \*/(?:\r?\n|$)",
+    re.MULTILINE,
+)
+ACCENT_DECLARATION_OR_COMMENT = re.compile(
+    rb"^(?P<indent>[ \t]*)(?P<accent>@define-color[ \t]+accent[ \t]+[^;\r\n/]+;)"
+    rb"|/\*.*?\*/",
+    re.MULTILINE | re.DOTALL,
+)
 WM_SCHEMA = "org.gnome.desktop.wm.preferences"
 BUTTON_LAYOUT_KEY = "button-layout"
 VISIBLE_BUTTON_LAYOUT = "appmenu:minimize,maximize,close"
@@ -79,12 +98,53 @@ def dark_mode_enabled(settings: Gio.Settings) -> bool:
         setting_has_key(settings, COLOR_SCHEME_KEY)
         and settings.get_string(COLOR_SCHEME_KEY) == "prefer-dark"
     )
-    dark_theme = (
-        setting_has_key(settings, GTK_THEME_KEY)
-        and settings.get_string(GTK_THEME_KEY).casefold()
-        == ADWAITA_DARK_THEME.casefold()
-    )
-    return prefers_dark or dark_theme
+    if prefers_dark or not setting_has_key(settings, GTK_THEME_KEY):
+        return prefers_dark
+    theme = settings.get_string(GTK_THEME_KEY).casefold()
+    return any(theme == dark.casefold() for _, dark in THEME_VARIANTS)
+
+
+def save_gtk_theme(theme: str, dark: bool) -> None:
+    """Set the GTK fallback used in sessions without a settings daemon."""
+    path = Path(GLib.get_user_config_dir()) / "gtk-3.0" / "settings.ini"
+    config = GLib.KeyFile()
+    if path.exists():
+        config.load_from_file(
+            str(path), GLib.KeyFileFlags.KEEP_COMMENTS | GLib.KeyFileFlags.KEEP_TRANSLATIONS
+        )
+    config.set_string("Settings", "gtk-theme-name", theme)
+    config.set_boolean("Settings", "gtk-application-prefer-dark-theme", dark)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config.save_to_file(str(path))
+
+
+def update_accent_override(rule: bytes | None) -> bool:
+    """Save a custom accent or comment out active user accent declarations."""
+    path = Path(GLib.get_user_config_dir()) / "gtk-3.0" / "gtk.css"
+    stylesheet = Gio.File.new_for_path(str(path))
+    try:
+        _, css, etag = stylesheet.load_contents(None)
+    except GLib.Error as exc:
+        if not exc.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
+            raise
+        css, etag = b"", None
+
+    if rule is None:
+        updated = ACCENT_DECLARATION_OR_COMMENT.sub(
+            lambda match: match["indent"] + b"/* " + match["accent"] + b" */"
+            if match["accent"] else match[0],
+            css,
+        )
+    else:
+        updated = MANAGED_ACCENT_RULE.sub(b"", css)
+        if updated and not updated.endswith(b"\n"):
+            updated += b"\n"
+        updated += rule + b" /* Yui Settings */\n"
+    if updated == css:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stylesheet.replace_contents(updated, etag, False, Gio.FileCreateFlags.NONE, None)
+    return True
 
 
 def get_os_name() -> str:
@@ -372,7 +432,8 @@ class SettingsWindow(Handy.ApplicationWindow):
             shell_group, "Log out and back in to apply mode changes.",
             "Mobile mode opens windows maximized without server-side decorations.",
         )
-        self._dark_mode_checkbox = switch_row(group(page.body, "Style"), "Dark appearance", False)
+        style_group = group(page.body, "Style")
+        self._dark_mode_checkbox = switch_row(style_group, "Dark appearance", False)
         if self._interface_settings is None:
             self._dark_mode_checkbox.set_sensitive(False)
             self._dark_mode_checkbox.set_tooltip_text("Dark mode is not supported by this desktop")
@@ -382,6 +443,14 @@ class SettingsWindow(Handy.ApplicationWindow):
             for key in (COLOR_SCHEME_KEY, GTK_THEME_KEY):
                 if setting_has_key(self._interface_settings, key):
                     self._interface_settings.connect(f"changed::{key}", self._on_dark_mode_setting_changed)
+        self._accent_provider = None
+        self._accent_button = Gtk.ColorButton(title="Choose an accent color", use_alpha=False)
+        self._accent_button.set_rgba(self._current_accent_color())
+        self._accent_button.connect("color-set", self._on_accent_color_set)
+        accent_row = action_row(
+            style_group, "Accent color", "DeletescapeUi GTK 3 themes", suffix=self._accent_button
+        )
+        accent_row.set_activatable_widget(self._accent_button)
         self._stack.add_titled(page, "appearance", "Appearance")
 
     def _on_shell_mode_changed(self, shell: str) -> None:
@@ -404,6 +473,14 @@ class SettingsWindow(Handy.ApplicationWindow):
 
     def _add_advanced_page(self) -> None:
         page = make_page()
+        appearance_group = group(page, "Appearance")
+        reset_accent = Gtk.Button(label="Reset")
+        reset_accent.connect("clicked", self._on_reset_accent)
+        reset_accent_row = action_row(
+            appearance_group, "Reset accent color", "Restore the DeletescapeUi default.",
+            suffix=reset_accent,
+        )
+        reset_accent_row.set_activatable_widget(reset_accent)
         keyboard_group = group(page, "On-screen keyboard")
         self._squeekboard_switch = switch_row(
             keyboard_group, "Squeekboard", load_config().get("squeekboard_enabled", False),
@@ -791,27 +868,97 @@ class SettingsWindow(Handy.ApplicationWindow):
         self._content_header.set_show_close_button(not leaflet.get_folded())
 
     def _on_dark_mode_toggled(self, checkbox, _pspec=None) -> None:
-        if self._interface_settings is None:
+        settings = self._interface_settings
+        if settings is None:
             return
 
         enabled = checkbox.get_active()
-        if setting_has_key(self._interface_settings, COLOR_SCHEME_KEY):
-            self._interface_settings.set_string(
-                COLOR_SCHEME_KEY,
-                "prefer-dark" if enabled else "default",
-            )
+        changes = {}
+        if setting_has_key(settings, COLOR_SCHEME_KEY):
+            scheme = "prefer-dark" if enabled else "default"
+            if settings.get_string(COLOR_SCHEME_KEY) != scheme:
+                changes[COLOR_SCHEME_KEY] = scheme
 
-        if setting_has_key(self._interface_settings, GTK_THEME_KEY):
-            theme = self._interface_settings.get_string(GTK_THEME_KEY)
-            if enabled and theme.casefold() == ADWAITA_THEME.casefold():
-                self._interface_settings.set_string(
-                    GTK_THEME_KEY, ADWAITA_DARK_THEME
-                )
-            elif (
-                not enabled
-                and theme.casefold() == ADWAITA_DARK_THEME.casefold()
-            ):
-                self._interface_settings.set_string(GTK_THEME_KEY, ADWAITA_THEME)
+        theme = (
+            settings.get_string(GTK_THEME_KEY)
+            if setting_has_key(settings, GTK_THEME_KEY) else ""
+        )
+        next_theme = next(
+            (dark if enabled else light for light, dark in THEME_VARIANTS
+             if theme.casefold() in (light.casefold(), dark.casefold())),
+            theme,
+        )
+        if next_theme != theme:
+            changes[GTK_THEME_KEY] = next_theme
+
+        deletescape = next_theme in (DELETESCAPE_THEME, DELETESCAPE_DARK_THEME)
+        try:
+            if any(not settings.is_writable(key) for key in changes):
+                raise OSError("Your administrator has locked the appearance settings.")
+            if deletescape:
+                save_gtk_theme(next_theme, enabled)
+            for key, value in changes.items():
+                if not settings.set_string(key, value):
+                    raise OSError("Could not update the desktop appearance settings.")
+        except (OSError, GLib.Error) as exc:
+            self._on_dark_mode_setting_changed(settings, "")
+            self._show_appearance_error("Could not change dark appearance.", exc)
+        else:
+            if deletescape:
+                gtk_settings = self.get_settings()
+                if gtk_settings.get_property("gtk-theme-name") != next_theme:
+                    gtk_settings.set_property("gtk-theme-name", next_theme)
+                gtk_settings.set_property("gtk-application-prefer-dark-theme", enabled)
+
+    def _current_accent_color(self) -> Gdk.RGBA:
+        found, color = self.get_style_context().lookup_color("accent")
+        if not found:
+            color = Gdk.RGBA()
+            color.parse(DEFAULT_ACCENT)
+        return color
+
+    def _on_accent_color_set(self, button: Gtk.ColorButton) -> None:
+        color = button.get_rgba()
+        accent = "#{:02X}{:02X}{:02X}".format(
+            *(round(channel * 255) for channel in (color.red, color.green, color.blue))
+        )
+        rule = f"@define-color accent {accent};".encode("ascii")
+        try:
+            update_accent_override(rule)
+        except (OSError, GLib.Error) as exc:
+            button.set_rgba(self._current_accent_color())
+            self._show_appearance_error("Could not save the accent color.", exc)
+            return
+
+        self._preview_accent(rule)
+
+    def _on_reset_accent(self, _button: Gtk.Button) -> None:
+        try:
+            changed = update_accent_override(None)
+        except (OSError, GLib.Error) as exc:
+            self._show_appearance_error("Could not reset the accent color.", exc)
+            return
+        if changed:
+            # GTK keeps its startup stylesheet loaded until the process exits.
+            self._preview_accent(f"@define-color accent {DEFAULT_ACCENT};".encode("ascii"))
+            self._accent_button.set_rgba(self._current_accent_color())
+
+    def _preview_accent(self, rule: bytes) -> None:
+        if self._accent_provider is None:
+            self._accent_provider = Gtk.CssProvider()
+            Gtk.StyleContext.add_provider_for_screen(
+                self.get_screen(), self._accent_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1
+            )
+        self._accent_provider.load_from_data(rule)
+
+    def _show_appearance_error(self, message: str, error: Exception) -> None:
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.CLOSE, text=message,
+        )
+        dialog.format_secondary_text(str(error))
+        dialog.run()
+        dialog.destroy()
 
     def _on_dark_mode_setting_changed(
         self, settings: Gio.Settings, _key: str

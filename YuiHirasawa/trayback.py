@@ -90,6 +90,21 @@ class StatusNotifierHost:
             def RegisterStatusNotifierHost(self, service: "s"):
                 host._register_host(service)
 
+            # pylance thinks there should be an expression where "as" is
+            # [{
+            # 	"resource": "/home/REDACTED/libitina/YuiHirasawa/trayback.py",
+            # 	"owner": "Pylance2",
+            # 	"severity": 8,
+            # 	"message": "Expected expression",
+            # 	"source": "Pylance",
+            # 	"startLineNumber": 95,
+            # 	"startColumn": 56,
+            # 	"endLineNumber": 95,
+            # 	"endColumn": 60,
+            # 	"modelVersionId": 108,
+            # 	"origin": "extHost1"
+            # }]
+            # not sure why this is happening
             @dbus_property(access=PropertyAccess.READ)
             def RegisteredStatusNotifierItems(self) -> "as":
                 return list(host._endpoints)
