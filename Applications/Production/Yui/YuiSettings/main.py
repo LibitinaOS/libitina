@@ -41,16 +41,31 @@ THEME_VARIANTS = (
     (DELETESCAPE_THEME, DELETESCAPE_DARK_THEME),
 )
 DEFAULT_ACCENT = "#FF00AA"
-MANAGED_ACCENT_RULE = re.compile(
-    rb"^(?:@define-color accent #[0-9A-Fa-f]{6};|/\* @define-color accent #[0-9A-Fa-f]{6}; \*/)"
-    rb" /\* Yui Settings \*/(?:\r?\n|$)",
+PALETTE_COLORS = {
+    "bg": "Background",
+    "panel": "Panel",
+    "panel2": "Secondary panel",
+    "fg": "Foreground",
+    "muted": "Muted text",
+    "progress": "Progress track",
+    "divider": "Divider",
+    "accent": "Accent",
+    "error_color": "Error",
+    "warning_color": "Warning",
+    "success_color": "Success",
+}
+MANAGED_COLOR_RULE = re.compile(
+    rb"^(?P<comment>/\* )?@define-color (?P<name>[a-z0-9_]+) #[0-9A-Fa-f]{6};"
+    rb"(?(comment) \*/) /\* Yui Settings \*/(?:\r?\n|$)",
     re.MULTILINE,
 )
-ACCENT_DECLARATION_OR_COMMENT = re.compile(
-    rb"^(?P<indent>[ \t]*)(?P<accent>@define-color[ \t]+accent[ \t]+[^;\r\n/]+;)"
+COLOR_DECLARATION_OR_COMMENT = re.compile(
+    rb"^(?P<indent>[ \t]*)(?P<declaration>@define-color[ \t]+"
+    rb"(?P<name>[a-z0-9_]+)[ \t]+[^;\r\n]+;)"
     rb"|/\*.*?\*/",
     re.MULTILINE | re.DOTALL,
 )
+THEME_COLOR_RULE = re.compile(r"^@define-color ([a-z0-9_]+) ([^;]+);$", re.MULTILINE)
 WM_SCHEMA = "org.gnome.desktop.wm.preferences"
 BUTTON_LAYOUT_KEY = "button-layout"
 VISIBLE_BUTTON_LAYOUT = "appmenu:minimize,maximize,close"
@@ -118,8 +133,8 @@ def save_gtk_theme(theme: str, dark: bool) -> None:
     config.save_to_file(str(path))
 
 
-def update_accent_override(rule: bytes | None) -> bool:
-    """Save a custom accent or comment out active user accent declarations."""
+def update_palette_overrides(name: str | None = None, value: str = "") -> set[str]:
+    """Save one palette color or comment out all active palette overrides."""
     path = Path(GLib.get_user_config_dir()) / "gtk-3.0" / "gtk.css"
     stylesheet = Gio.File.new_for_path(str(path))
     try:
@@ -129,22 +144,33 @@ def update_accent_override(rule: bytes | None) -> bool:
             raise
         css, etag = b"", None
 
-    if rule is None:
-        updated = ACCENT_DECLARATION_OR_COMMENT.sub(
-            lambda match: match["indent"] + b"/* " + match["accent"] + b" */"
-            if match["accent"] else match[0],
-            css,
-        )
+    changed = set()
+    if name is None:
+        def comment_override(match: re.Match[bytes]) -> bytes:
+            if match["name"] is None or match["name"].decode("ascii") not in PALETTE_COLORS:
+                return match[0]
+            # Strip comment delimiters inside the value before enclosing the declaration.
+            declaration = re.sub(rb"/\*.*?\*/", b" ", match["declaration"])
+            if b"/*" in declaration or b"*/" in declaration:
+                return match[0]
+            changed.add(match["name"].decode("ascii"))
+            return match["indent"] + b"/* " + declaration + b" */"
+
+        updated = COLOR_DECLARATION_OR_COMMENT.sub(comment_override, css)
     else:
-        updated = MANAGED_ACCENT_RULE.sub(b"", css)
+        encoded_name = name.encode("ascii")
+        updated = MANAGED_COLOR_RULE.sub(
+            lambda match: b"" if match["name"] == encoded_name else match[0], css
+        )
         if updated and not updated.endswith(b"\n"):
             updated += b"\n"
-        updated += rule + b" /* Yui Settings */\n"
+        updated += f"@define-color {name} {value}; /* Yui Settings */\n".encode("ascii")
+        changed.add(name)
     if updated == css:
-        return False
+        return set()
     path.parent.mkdir(parents=True, exist_ok=True)
     stylesheet.replace_contents(updated, etag, False, Gio.FileCreateFlags.NONE, None)
-    return True
+    return changed
 
 
 def get_os_name() -> str:
@@ -443,10 +469,21 @@ class SettingsWindow(Handy.ApplicationWindow):
             for key in (COLOR_SCHEME_KEY, GTK_THEME_KEY):
                 if setting_has_key(self._interface_settings, key):
                     self._interface_settings.connect(f"changed::{key}", self._on_dark_mode_setting_changed)
-        self._accent_provider = None
+        self._palette_provider = Gtk.CssProvider()
+        self._palette_preview: dict[str, str | None] = {}
+        Gtk.StyleContext.add_provider_for_screen(
+            self.get_screen(), self._palette_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1
+        )
+        self.connect("destroy", lambda *_: Gtk.StyleContext.remove_provider_for_screen(
+            self.get_screen(), self._palette_provider
+        ))
         self._accent_button = Gtk.ColorButton(title="Choose an accent color", use_alpha=False)
-        self._accent_button.set_rgba(self._current_accent_color())
-        self._accent_button.connect("color-set", self._on_accent_color_set)
+        self._accent_button.set_rgba(self._current_palette_color("accent", {"accent": DEFAULT_ACCENT}))
+        self._accent_button.connect("color-set", self._on_palette_color_set, "accent")
+        for setting in ("gtk-theme-name", "gtk-application-prefer-dark-theme"):
+            self.get_settings().connect_object(
+                f"notify::{setting}", SettingsWindow._refresh_palette_preview, self
+            )
         accent_row = action_row(
             style_group, "Accent color", "", suffix=self._accent_button
         )
@@ -474,13 +511,14 @@ class SettingsWindow(Handy.ApplicationWindow):
     def _add_advanced_page(self) -> None:
         page = make_page()
         appearance_group = group(page, "Appearance")
-        reset_accent = Gtk.Button(label="Reset")
-        reset_accent.connect("clicked", self._on_reset_accent)
-        reset_accent_row = action_row(
-            appearance_group, "Reset accent color", "Restore the DeletescapeUi default.",
-            suffix=reset_accent,
+        action_row(appearance_group, "Advanced color changer", callback=self._open_palette_editor)
+        reset_colors = Gtk.Button(label="Reset")
+        reset_colors.connect("clicked", self._on_reset_palette)
+        reset_colors_row = action_row(
+            appearance_group, "Reset theme colors", "Restore the DeletescapeUi palette.",
+            suffix=reset_colors,
         )
-        reset_accent_row.set_activatable_widget(reset_accent)
+        reset_colors_row.set_activatable_widget(reset_colors)
         keyboard_group = group(page, "On-screen keyboard")
         self._squeekboard_switch = switch_row(
             keyboard_group, "Squeekboard", load_config().get("squeekboard_enabled", False),
@@ -910,50 +948,85 @@ class SettingsWindow(Handy.ApplicationWindow):
                     gtk_settings.set_property("gtk-theme-name", next_theme)
                 gtk_settings.set_property("gtk-application-prefer-dark-theme", enabled)
 
-    def _current_accent_color(self) -> Gdk.RGBA:
-        found, color = self.get_style_context().lookup_color("accent")
+    def _theme_palette(self) -> dict[str, str]:
+        settings = self.get_settings()
+        theme = settings.get_property("gtk-theme-name")
+        dark = settings.get_property("gtk-application-prefer-dark-theme")
+        if theme not in (DELETESCAPE_THEME, DELETESCAPE_DARK_THEME):
+            theme = DELETESCAPE_DARK_THEME if dark else DELETESCAPE_THEME
+        provider = Gtk.CssProvider.get_named(theme, "dark" if dark else None)
+        colors = dict(THEME_COLOR_RULE.findall(provider.to_string()))
+        return {name: colors[name] for name in PALETTE_COLORS if name in colors} | {
+            "accent": colors.get("accent", DEFAULT_ACCENT),
+        }
+
+    def _current_palette_color(self, name: str, defaults: dict[str, str]) -> Gdk.RGBA:
+        found, color = self.get_style_context().lookup_color(name)
         if not found:
             color = Gdk.RGBA()
-            color.parse(DEFAULT_ACCENT)
+            color.parse(defaults.get(name, "#000000"))
         return color
 
-    def _on_accent_color_set(self, button: Gtk.ColorButton) -> None:
+    def _open_palette_editor(self) -> None:
+        dialog = Gtk.Dialog(title="Advanced color changer", transient_for=self, modal=True)
+        dialog.set_default_size(400, 500)
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
+        dialog.connect("response", lambda dialog, _response: dialog.destroy())
+        page = PreferencesPage()
+        dialog.get_content_area().pack_start(page, True, True, 0)
+        colors = group(page.body)
+        defaults = self._theme_palette()
+        for name, label in PALETTE_COLORS.items():
+            button = Gtk.ColorButton(title=f"Choose {label.lower()} color", use_alpha=False)
+            button.set_rgba(self._current_palette_color(name, defaults))
+            button.connect("color-set", self._on_palette_color_set, name)
+            row = action_row(colors, label, name, suffix=button)
+            row.set_activatable_widget(button)
+        dialog.show_all()
+
+    def _on_palette_color_set(self, button: Gtk.ColorButton, name: str) -> None:
         color = button.get_rgba()
-        accent = "#{:02X}{:02X}{:02X}".format(
+        value = "#{:02X}{:02X}{:02X}".format(
             *(round(channel * 255) for channel in (color.red, color.green, color.blue))
         )
-        rule = f"@define-color accent {accent};".encode("ascii")
         try:
-            update_accent_override(rule)
+            update_palette_overrides(name, value)
         except (OSError, GLib.Error) as exc:
-            button.set_rgba(self._current_accent_color())
-            self._show_appearance_error("Could not save the accent color.", exc)
+            button.set_rgba(self._current_palette_color(name, self._theme_palette()))
+            self._show_appearance_error("Could not save the theme color.", exc, button.get_toplevel())
             return
 
-        self._preview_accent(rule)
+        self._palette_preview[name] = value
+        self._refresh_palette_preview()
 
-    def _on_reset_accent(self, _button: Gtk.Button) -> None:
+    def _on_reset_palette(self, _button: Gtk.Button) -> None:
         try:
-            changed = update_accent_override(None)
+            changed = update_palette_overrides()
         except (OSError, GLib.Error) as exc:
-            self._show_appearance_error("Could not reset the accent color.", exc)
+            self._show_appearance_error("Could not reset the theme colors.", exc)
             return
         if changed:
             # GTK keeps its startup stylesheet loaded until the process exits.
-            self._preview_accent(f"@define-color accent {DEFAULT_ACCENT};".encode("ascii"))
-            self._accent_button.set_rgba(self._current_accent_color())
+            self._palette_preview.update(dict.fromkeys(changed))
+            self._refresh_palette_preview()
 
-    def _preview_accent(self, rule: bytes) -> None:
-        if self._accent_provider is None:
-            self._accent_provider = Gtk.CssProvider()
-            Gtk.StyleContext.add_provider_for_screen(
-                self.get_screen(), self._accent_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1
-            )
-        self._accent_provider.load_from_data(rule)
+    def _refresh_palette_preview(self, *_args) -> None:
+        if not self._palette_preview:
+            return
+        defaults = self._theme_palette() if None in self._palette_preview.values() else {}
+        rules = []
+        for name, value in self._palette_preview.items():
+            color = value if value is not None else defaults.get(name)
+            if color is not None:
+                rules.append(f"@define-color {name} {color};")
+        self._palette_provider.load_from_data("\n".join(rules).encode("ascii"))
+        self._accent_button.set_rgba(self._current_palette_color("accent", {"accent": DEFAULT_ACCENT}))
 
-    def _show_appearance_error(self, message: str, error: Exception) -> None:
+    def _show_appearance_error(
+        self, message: str, error: Exception, parent: Gtk.Window | None = None
+    ) -> None:
         dialog = Gtk.MessageDialog(
-            transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+            transient_for=parent or self, modal=True, message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.CLOSE, text=message,
         )
         dialog.format_secondary_text(str(error))

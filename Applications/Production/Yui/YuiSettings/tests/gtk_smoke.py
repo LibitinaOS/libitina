@@ -10,6 +10,9 @@ from unittest.mock import patch
 temporary = tempfile.TemporaryDirectory(prefix='yui-settings-smoke-')
 os.environ['GSETTINGS_BACKEND'] = 'memory'
 os.environ['XDG_CONFIG_HOME'] = temporary.name
+os.environ['XDG_DATA_HOME'] = temporary.name
+theme_source = Path(__file__).resolve().parents[4] / 'Internal/Global/DeletescapeUiThemeInstall/themes'
+(Path(temporary.name) / 'themes').symlink_to(theme_source, target_is_directory=True)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gi
 gi.require_version('Gtk', '3.0')
@@ -160,40 +163,65 @@ for value in ('#123ABC', '#00C3FF'):
     accent_button.set_rgba(color)
     accent_button.emit('color-set')
     assert user_css.read_text() == existing_rules + manual_accent + f'@define-color accent {value}; /* Yui Settings */\n'
-    assert window._current_accent_color().equal(color)
+    assert window._current_palette_color('accent', {}).equal(color)
 
 window._dark_mode_checkbox.set_active(True)
 assert interface.get_string(main.GTK_THEME_KEY) == main.DELETESCAPE_DARK_THEME
 assert interface.get_string(main.COLOR_SCHEME_KEY) == 'prefer-dark'
 assert 'gtk-application-prefer-dark-theme=true' in gtk_ini.read_text()
 assert 'gtk-icon-theme-name=hicolor' in gtk_ini.read_text()
-assert window._current_accent_color().equal(color)
-reset_accent = row(window._stack.get_child_by_name('advanced'), 'Reset accent color').get_activatable_widget()
-reset_accent.clicked()
-reset_accent.clicked()
+assert window._current_palette_color('accent', {}).equal(color)
+advanced = window._stack.get_child_by_name('advanced')
+row(advanced, 'Advanced color changer').activate()
+palette_editor = dialog('Advanced color changer')
+for name, label in main.PALETTE_COLORS.items():
+    assert row(palette_editor, label).get_subtitle() == name
+for label, value in [('Background', '#212335'), ('Foreground', '#F2F4F9'), ('Accent', '#FF8800')]:
+    picker = row(palette_editor, label).get_activatable_widget()
+    palette_color = Gdk.RGBA()
+    palette_color.parse(value)
+    picker.set_rgba(palette_color)
+    picker.emit('color-set')
+assert accent_button.get_rgba().equal(palette_color)
+palette_editor.response(Gtk.ResponseType.CLOSE)
+assert '@define-color bg #212335; /* Yui Settings */\n' in user_css.read_text()
+assert '@define-color fg #F2F4F9; /* Yui Settings */\n' in user_css.read_text()
+reset_colors = row(advanced, 'Reset theme colors').get_activatable_widget()
+reset_colors.clicked()
+reset_colors.clicked()
 assert user_css.read_text() == (
     existing_rules
     + ' /* @define-color accent #765432; */\n'
-    + '/* @define-color accent #00C3FF; */ /* Yui Settings */\n'
+    + '/* @define-color bg #212335; */ /* Yui Settings */\n'
+    + '/* @define-color fg #F2F4F9; */ /* Yui Settings */\n'
+    + '/* @define-color accent #FF8800; */ /* Yui Settings */\n'
 )
 default_accent = Gdk.RGBA()
 default_accent.parse(main.DEFAULT_ACCENT)
 assert accent_button.get_rgba().equal(default_accent)
-assert window._current_accent_color().equal(default_accent)
+assert window._current_palette_color('accent', {}).equal(default_accent)
+dark_bg = Gdk.RGBA()
+dark_bg.parse('#131313')
+assert window._current_palette_color('bg', {}).equal(dark_bg)
 accent_button.set_rgba(color)
 accent_button.emit('color-set')
 assert user_css.read_text() == (
     existing_rules
     + ' /* @define-color accent #765432; */\n'
+    + '/* @define-color bg #212335; */ /* Yui Settings */\n'
+    + '/* @define-color fg #F2F4F9; */ /* Yui Settings */\n'
     + '@define-color accent #00C3FF; /* Yui Settings */\n'
 )
-reset_accent.clicked()
+reset_colors.clicked()
 window._dark_mode_checkbox.set_active(False)
+light_bg = Gdk.RGBA()
+light_bg.parse('#FFFFFF')
+assert window._current_palette_color('bg', {}).equal(light_bg)
 window.get_settings().reset_property('gtk-theme-name')
 window.get_settings().reset_property('gtk-application-prefer-dark-theme')
 interface.set_string(main.GTK_THEME_KEY, original_theme)
 interface.set_string(main.COLOR_SCHEME_KEY, original_scheme)
-print('DeletescapeUi appearance switches variants and saves and resets custom accents', flush=True)
+print('DeletescapeUi appearance switches variants and saves and resets palette colors', flush=True)
 
 window.show_all()
 settle()
