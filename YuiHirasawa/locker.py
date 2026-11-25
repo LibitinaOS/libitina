@@ -19,7 +19,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, Gio, GLib, Gtk, GtkLayerShell
 
-from settings import load_config
+from settings import format_clock_time, load_config
 PAM_SUCCESS = 0
 PAM_SYSTEM_ERR = 4
 PAM_BUF_ERR = 5
@@ -618,7 +618,7 @@ class LockScreen(Gtk.Window):
         return GLib.SOURCE_REMOVE
     def _update_clock(self) -> bool:
         now = dt.datetime.now().astimezone()
-        self._clock_label.set_text(now.strftime("%H:%M"))
+        self._clock_label.set_text(format_clock_time(now, load_config()["clock_format"]))
         self._date_label.set_text(now.strftime("%a, %b %-d"))
         return GLib.SOURCE_CONTINUE
 def main() -> int:

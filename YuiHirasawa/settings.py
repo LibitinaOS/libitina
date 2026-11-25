@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -29,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mobile_layout": MOBILE_LAYOUT_DEFAULTS.copy(),
     "wallpaper": "zohran", "wallpaper_enabled": True, "shell": "desktop", "software_rendering_apps": [],
     "lock_wallpaper": "zohran",
+    "clock_format": "24h",
     "squeekboard_enabled": False,
     "show_internal_watermark": True,
     "enable_lille": False,
@@ -66,6 +68,14 @@ def set_wallpaper(value: str, *, lock_screen: bool = False) -> None:
 
 
 SHELL_OPTIONS = ("desktop", "mobile")
+CLOCK_FORMAT_OPTIONS = ("24h", "12h")
+
+
+def format_clock_time(now: datetime, clock_format: str) -> str:
+    if clock_format == "12h":
+        period = now.strftime("%p") or ("AM" if now.hour < 12 else "PM")
+        return f"{now.hour % 12 or 12}:{now.minute:02d} {period}"
+    return now.strftime("%H:%M")
 
 
 def validate_lille(config):
@@ -150,6 +160,7 @@ def load_config() -> dict[str, Any]:
         lock_wallpaper = "zohran"
     value = data.get("wallpaper_enabled")
     shell = data.get("shell")
+    clock_format = data.get("clock_format")
     app_ids = data.get("software_rendering_apps", [])
     lille_values = {}
     for key in ('enable_lille_config', 'lille_ssids', 'lille_bssids', 'lille_require_charger',
@@ -172,6 +183,8 @@ def load_config() -> dict[str, Any]:
         if isinstance(value, bool)
         else DEFAULT_CONFIG["wallpaper_enabled"],
         "shell": shell if shell in SHELL_OPTIONS else DEFAULT_CONFIG["shell"],
+        "clock_format": clock_format
+        if clock_format in CLOCK_FORMAT_OPTIONS else DEFAULT_CONFIG["clock_format"],
         "squeekboard_enabled": data.get("squeekboard_enabled", False)
         if isinstance(data.get("squeekboard_enabled", False), bool) else False,
         "software_rendering_apps": app_ids,
@@ -210,6 +223,9 @@ def save_config(config: Mapping[str, Any]) -> None:
     shell = config.get("shell", DEFAULT_CONFIG["shell"])
     if shell not in SHELL_OPTIONS:
         raise ValueError("shell must be 'desktop' or 'mobile'")
+    clock_format = config.get("clock_format", DEFAULT_CONFIG["clock_format"])
+    if clock_format not in CLOCK_FORMAT_OPTIONS:
+        raise ValueError("clock_format must be '24h' or '12h'")
     app_ids = validate_software_rendering_apps(config.get("software_rendering_apps", []))
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +243,7 @@ def save_config(config: Mapping[str, Any]) -> None:
                 {**config, **lille_values, "mobile_layout": mobile_layout,
                  "wallpaper": wallpaper, "wallpaper_enabled": wallpaper_enabled_value,
                  "lock_wallpaper": lock_wallpaper,
-                 "shell": shell, "software_rendering_apps": app_ids,
+                 "shell": shell, "clock_format": clock_format, "software_rendering_apps": app_ids,
                  "squeekboard_enabled": squeekboard_enabled,
                  "enable_lille": lille_enabled,
                  "lille_location": lille_location.strip(),
@@ -271,4 +287,10 @@ def set_software_rendering_apps(app_ids: list[str]) -> None:
     app_ids = validate_software_rendering_apps(app_ids)
     config = load_config()
     config["software_rendering_apps"] = app_ids
+    save_config(config)
+
+
+def set_clock_format(clock_format: str) -> None:
+    config = load_config()
+    config["clock_format"] = clock_format
     save_config(config)

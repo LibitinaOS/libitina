@@ -1,6 +1,7 @@
 """Desktop shell layout and interactions."""
 
 import getpass
+from datetime import datetime
 
 import gi
 
@@ -19,6 +20,7 @@ from control_center import StatusControls
 from power_menu import create_power_menu
 from launcher_control import LauncherControl
 from lock_state import LockStateMonitor
+from settings import format_clock_time, load_config
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu, round_window_corners, animate_window_from_edge, close_animated_panel, open_animated_panel
 
@@ -209,9 +211,9 @@ class Taskbar(Gtk.Window, ApplicationCatalog):
             self.show_all()
 
     def _update_clock(self) -> bool:
-        now = GLib.DateTime.new_now_local()
-        self._clock.set_text(now.format("%H:%M"))
-        self._clock.set_tooltip_text(now.format("%A, %B %e, %Y"))
+        now = datetime.now()
+        self._clock.set_text(format_clock_time(now, load_config()["clock_format"]))
+        self._clock.set_tooltip_text(now.strftime("%A, %B %e, %Y"))
         return True
 
     def _install_css(self):

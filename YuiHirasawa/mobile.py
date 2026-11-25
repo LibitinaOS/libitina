@@ -1,5 +1,6 @@
 """Mobile shell layout and interactions."""
 
+from datetime import datetime
 from typing import Callable
 import math
 import weakref
@@ -23,6 +24,7 @@ from mobile_layout import load_layout, inset_content
 from mobile_control_center import MobileStatusControls
 from launcher_control import LauncherControl
 from lock_state import LockStateMonitor
+from settings import format_clock_time, load_config
 from app_launch import launch_application, launch_in_foot
 from shell_widgets import SystemTray, _fixed_icon_image, show_error_dialog, attach_application_menu
 from wallpaper import Wallpaper
@@ -618,9 +620,9 @@ class StatusBar(Gtk.Window):
         GLib.timeout_add_seconds(1, self._update_clock)
 
     def _update_clock(self) -> bool:
-        now = GLib.DateTime.new_now_local()
-        self._clock.set_text(now.format("%H:%M"))
-        self._clock.set_tooltip_text(now.format("%A, %B %e, %Y"))
+        now = datetime.now()
+        self._clock.set_text(format_clock_time(now, load_config()["clock_format"]))
+        self._clock.set_tooltip_text(now.strftime("%A, %B %e, %Y"))
         return True
 
 
