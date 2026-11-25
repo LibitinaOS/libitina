@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from gi.repository import GLib
 
+from startup_warning import show_startup_warning
+
 TRAY_ICON_SIZE = 32
 
 
@@ -63,6 +65,7 @@ class StatusNotifierHost:
             asyncio.run(self._async_main())
         except Exception as exc:
             print(f"taskbar: system tray unavailable: {exc}", file=sys.stderr)
+            GLib.idle_add(show_startup_warning, "System tray unavailable", str(exc))
 
     async def _async_main(self) -> None:
         from dbus_next import BusType, Message, MessageType, Variant

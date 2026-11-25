@@ -15,25 +15,7 @@ gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, GtkLayerShell
 
 from settings import load_config, wallpaper_path
-
-def _show_cairo_issue(details):
-    dialog = Gtk.MessageDialog(
-        title="Wallpaper issue",
-        message_type=Gtk.MessageType.WARNING,
-        buttons=Gtk.ButtonsType.NONE,
-        text="Wallpaper issue",
-    )
-    dialog.format_secondary_text(
-        "Could not import PyGObject Cairo bridge. There is something wrong with "
-        "the Python. If this is debian, install python3-gi-cairo, if other please "
-        "consult your distro. Falled back to pixbuf for now. Additional details: "
-        f"{details}"
-    )
-    dialog.add_button("Okay", Gtk.ResponseType.OK)
-    dialog.connect("response", lambda widget, _response: widget.destroy())
-    dialog.show_all()
-    return GLib.SOURCE_REMOVE
-
+from startup_warning import show_startup_warning
 
 try:
     gi.require_foreign("cairo", "Surface")
@@ -41,7 +23,10 @@ except ImportError as exc:
     _CAIRO_SURFACES = False
     logging.warning("Cairo surface support unavailable %s", exc)
     # Show once, after GTK's main loop starts, without blocking the shell.
-    GLib.idle_add(_show_cairo_issue, str(exc))
+    GLib.idle_add(
+        show_startup_warning, "Wallpaper issue",
+        f"Could not load the PyGObject Cairo bridge. Wallpaper will use pixbuf. If using a built LibitinaOS image this should not happen. If so, please file an issue.",
+    )
 else:
     _CAIRO_SURFACES = True
 

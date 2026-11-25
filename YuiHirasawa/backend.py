@@ -20,6 +20,8 @@ from typing import Any, Callable
 
 from gi.repository import Gio, GLib
 
+from startup_warning import show_startup_warning
+
 # Wire-compatible subset of wlr-protocols/unstable/
 # wlr-foreign-toplevel-management-unstable-v1.xml. Both labwc 0.8.3
 # (Debian 13) and 0.20.2 (Debian 14 testing) implement this interface.
@@ -140,16 +142,12 @@ class WaylandWindowCollector:
             # (e.g. a missing shared library) instead of hiding it in that hint.
             print(f"taskbar: pywayland unavailable using {sys.executable}", file=sys.stderr)
             traceback.print_exception(type(exc), exc, exc.__traceback__)
-            cause = exc
-            while cause is not None:
-                if isinstance(cause, ModuleNotFoundError) and cause.name == "_cffi_backend":
-                    print(
-                        "taskbar: missing CFFI runtime. On Debian, run "
-                        "'sudo apt install python3-cffi-backend', then restart Yui.",
-                        file=sys.stderr,
-                    )
-                    break
-                cause = cause.__cause__ or cause.__context__
+            cause = exc.__cause__ or exc.__context__ or exc
+            # GTK dialogs must be created on the main thread.
+            GLib.idle_add(
+                show_startup_warning, "PyWayland issue",
+                f"Could not load PyWayland. Yui will run without the list of open windows. You may need to install PyWayland. If using a built LibitinaOS image this should not happen. If so, please file an issue.",
+            )
             return
 
         while True:
