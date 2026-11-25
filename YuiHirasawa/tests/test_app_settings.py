@@ -1,5 +1,6 @@
 """Exercise persistence shared by the shell and standalone Settings payload."""
 
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -40,6 +41,28 @@ class AppSettingsTests(unittest.TestCase):
         config = settings.load_config()
         self.assertEqual(config["software_rendering_apps"], [])
         self.assertEqual(json.loads(self.path.read_text()), config)
+
+    def test_clock_format_defaults_and_round_trips(self):
+        self.assertEqual(settings.load_config()["clock_format"], "24h")
+        self.path.write_text(json.dumps({"shell": "mobile"}))
+        self.assertEqual(settings.load_config()["clock_format"], "24h")
+        settings.set_clock_format("12h")
+        self.assertEqual(settings.load_config()["clock_format"], "12h")
+        self.assertEqual(settings.load_config()["shell"], "mobile")
+        saved = self.path.read_bytes()
+        with self.assertRaises(ValueError):
+            settings.set_clock_format("invalid")
+        self.assertEqual(self.path.read_bytes(), saved)
+        self.path.write_text(json.dumps({"clock_format": []}))
+        self.assertEqual(settings.load_config()["clock_format"], "24h")
+
+    def test_clock_format_at_midnight_noon_and_afternoon(self):
+        for hour, twelve_hour, period in ((0, 12, "AM"), (12, 12, "PM"), (15, 3, "PM")):
+            with self.subTest(hour=hour):
+                now = datetime(2026, 1, 1, hour, 5)
+                self.assertEqual(settings.format_clock_time(now, "24h"), f"{hour:02d}:05")
+                self.assertEqual(settings.format_clock_time(now, "12h"),
+                                 f"{twelve_hour}:05 {now.strftime('%p') or period}")
 
     def test_existing_config_migrates_and_preserves_other_settings(self):
         self.path.parent.mkdir()

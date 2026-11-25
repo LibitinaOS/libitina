@@ -6,6 +6,7 @@ import threading
 from gi.repository import Gio, GLib, Gtk
 
 import system_backend as backend
+from settings import format_clock_time, load_config, set_clock_format
 from service_page import (
     PreferencesPage, ServicePage, action_row, choice_row, confirm, field, form,
     group, present_dialog, switch_row,
@@ -139,9 +140,44 @@ class PowerPage(ServicePage):
 
 
 class DateTimePage(ServicePage):
+    CLOCK_FORMAT_CHOICES = (("24h", "24-hour"), ("12h", "12-hour"))
+
     def __init__(self):
         self._zones = None
         super().__init__()
+        self._clock_format = load_config()["clock_format"]
+        self._manual_date_row = None
+        # Keep the display preference available when the time service is unavailable.
+        preferences = self.body.get_parent()
+        display = group(preferences)
+        preferences.reorder_child(display, 0)
+        self._clock_format_row = choice_row(
+            display, "Time format", self.CLOCK_FORMAT_CHOICES,
+            active=self._clock_format, changed=self._on_clock_format_changed,
+        )
+
+    def _on_clock_format_changed(self, clock_format):
+        if clock_format is None or clock_format == self._clock_format:
+            return
+        try:
+            set_clock_format(clock_format)
+        except (OSError, ValueError) as exc:
+            self._clock_format_row.set_selected_index(0 if self._clock_format == "24h" else 1)
+            dialog = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(), modal=True, message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.CLOSE, text="Could not save the time format.",
+            )
+            dialog.format_secondary_text(str(exc))
+            dialog.connect("response", lambda widget, *_: widget.destroy())
+            dialog.show()
+            return
+        self._clock_format = clock_format
+        if self._manual_date_row is not None:
+            self._manual_date_row.set_subtitle(self._date_time_summary())
+
+    def _date_time_summary(self):
+        now = datetime.now().astimezone()
+        return now.strftime("%A, %d %B %Y") + " · " + format_clock_time(now, self._clock_format)
 
     def load(self):
         data = backend.clock_snapshot()
@@ -155,9 +191,9 @@ class DateTimePage(ServicePage):
                                lambda active: self.perform(lambda: backend.set_clock("SetNTP", "(bb)", active)),
                                "Synchronized" if data.get("NTPSynchronized") == "yes" else "")
         automatic.set_sensitive(data.get("CanNTP") == "yes")
-        manual = action_row(clock, "Date & time", datetime.now().astimezone().strftime("%A, %d %B %Y · %H:%M"),
-                            "preferences-system-time-symbolic", self._manual)
-        manual.set_sensitive(data.get("NTP") != "yes")
+        self._manual_date_row = action_row(clock, "Date & time", self._date_time_summary(),
+                                           "preferences-system-time-symbolic", self._manual)
+        self._manual_date_row.set_sensitive(data.get("NTP") != "yes")
         action_row(group(self.body), "Time zone", data.get("Timezone", "Unknown").replace("_", " "),
                    "find-location-symbolic", lambda: self._timezone(data.get("Timezone", "")))
 

@@ -47,6 +47,11 @@ volume, and battery icons every three seconds. Icons show Wi-Fi signal strength
 or wired/disconnected state, audio level/mute, and battery level/charging.
 Battery status uses UPower's combined system battery, excluding peripherals.
 
+In **Yui Settings → Date & Time → Time format**, choose **12-hour** or
+**24-hour** (the default). The desktop taskbar, mobile status bar, and lock screen
+update automatically. The preference is stored as `"clock_format": "12h"` or
+`"clock_format": "24h"` in `~/.config/yui/config.json`.
+
 Click or tap any of these four buttons to open **Control Center**. It provides
 volume and hardware brightness sliders, mute, Wi-Fi, and Bluetooth switches,
 plus connection and battery status. Slider changes apply immediately after a
